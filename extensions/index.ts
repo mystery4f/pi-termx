@@ -98,6 +98,20 @@ export default function termxExtension(pi: ExtensionAPI) {
     if (ws) { ws.close(); ws = null; }
   });
 
+  // 自动标状态
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  pi.on("before_agent_start", async () => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, status: "busy" }).catch(() => {});
+  });
+  pi.on("turn_end", async () => {
+    // 延迟 5s——如果新一轮马上开始就取消，否则才标 idle
+    idleTimer = setTimeout(() => {
+      api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, status: "idle" }).catch(() => {});
+      idleTimer = null;
+    }, 5000);
+  });
+
   // ── termx_set_label ──
 
   pi.registerTool({
