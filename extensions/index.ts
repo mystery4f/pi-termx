@@ -1,8 +1,8 @@
 /**
- * TermX Extension — 消息收发
+ * TermX Extension - 消息收发
  *
  * termx_list_panes: 找其他 pane
- * termx_ask: 发消息（同步等回复 / 异步 / 回复）
+ * termx_ask: 发消息(同步等回复 / 异步 / 回复)
  * WS 收消息自动触发 turn
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -39,7 +39,7 @@ function api(endpoint: string, body: Record<string, unknown>): Promise<{ ok: boo
 }
 
 export default function termxExtension(pi: ExtensionAPI) {
-  if (!IS_TERMX) return; // 不在 TermX 中，静默跳过
+  if (!IS_TERMX) return; // 不在 TermX 中,静默跳过
   let ws: WebSocket | null = null;
   let paneId = PANE_ID;
 
@@ -51,7 +51,7 @@ export default function termxExtension(pi: ExtensionAPI) {
       ws.on("open", () => {
         ws!.send(JSON.stringify({ type: "listen", paneId, token: TOKEN }));
 
-        // 注入：告诉模型可以并行派活
+        // 注入:告诉模型可以并行派活
         pi.sendMessage({
           customType: "termx-init",
           content: [
@@ -60,7 +60,7 @@ export default function termxExtension(pi: ExtensionAPI) {
             "  - Use idle helpers first, spawn more only when needed",
             "  - Spawn: `termx pane spawn pi --model <model>`",
             "  - Tag: `termx pane label <paneId> <label>` to mark what a helper works on",
-            "  - Delegate: termx_ask(targetPaneId, content) — include relevant code/context",
+            "  - Delegate: termx_ask(targetPaneId, content) - include relevant code/context",
             "  - Replies arrive automatically",
           ].join("\n"),
           display: false,
@@ -78,7 +78,7 @@ export default function termxExtension(pi: ExtensionAPI) {
               content: [
                 `📩 ${msg.from.slice(0, 8)} [${msg.id}]`,
                 `"${msg.content}"`,
-                `→ termx_ask(targetPaneId="${msg.from.slice(0, 8)}", content="...", replyTo="${msg.id}", async=true)`,
+                `→ Reply: termx_ask(targetPaneId="${msg.from}", content="...", replyTo="${msg.id}", async=true)`,
               ].join("\n"),
               display: true,
               details: msg,
@@ -168,7 +168,7 @@ export default function termxExtension(pi: ExtensionAPI) {
         const wsAsk = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
         const timer = setTimeout(() => {
           wsAsk.close();
-          resolve({ content: [{ type: "text", text: "Timed out — no reply" }] });
+          resolve({ content: [{ type: "text", text: "Timed out - no reply" }] });
         }, 300_000);
 
         signal?.addEventListener("abort", () => { clearTimeout(timer); wsAsk.close(); });
