@@ -50,8 +50,6 @@ export default function termxExtension(pi: ExtensionAPI) {
   // ── WS 收消息 ──
 
   pi.on("session_start", async () => {
-    // 自动标 busy
-    api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, status: "busy" });
     try {
       ws = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
       ws.on("open", () => {
@@ -98,14 +96,6 @@ export default function termxExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     if (ws) { ws.close(); ws = null; }
-  });
-
-  // 自动标状态：开始工作 → busy，完成一轮 → idle
-  pi.on("before_agent_start", async () => {
-    api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, status: "busy" }).catch(() => {});
-  });
-  pi.on("turn_end", async () => {
-    api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, status: "idle" }).catch(() => {});
   });
 
   // ── termx_set_label ──
