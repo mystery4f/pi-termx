@@ -213,7 +213,7 @@ export default function termxExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "termx_list_agents",
     label: "List Available Agents",
-    description: "List all configured agents from .pi/agents/*.md files. Each agent has a name, description, and optional model/thinking settings.",
+    description: "List all configured agents from .pi/agents/*.md files. Each agent has a name, description, model, thinking, cwd, and source.",
     parameters: Type.Object({}),
     async execute() {
       const agents = discoverAgents().map((a) => ({
@@ -221,6 +221,7 @@ export default function termxExtension(pi: ExtensionAPI) {
         description: a.description,
         model: a.model || "(default)",
         thinkingLevel: a.thinkingLevel || "(default)",
+        cwd: a.cwd || "(default)",
         source: a.source,
       }));
       return { content: [{ type: "text", text: JSON.stringify(agents, null, 2) }] };
@@ -236,7 +237,6 @@ export default function termxExtension(pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "Agent name from termx_list_agents" }),
       task: Type.Optional(Type.String({ description: "Task to send to the agent after spawning" })),
-      direction: Type.Optional(Type.String({ description: "Split direction: right or down (default: right)" })),
     }),
     async execute(_id, params) {
       const agent = getAgent(params.name);
@@ -258,21 +258,18 @@ export default function termxExtension(pi: ExtensionAPI) {
       if (agent.thinkingLevel) piArgs.push("--thinking", agent.thinkingLevel);
       if (agent.tools?.length) piArgs.push("--tools", agent.tools.join(","));
       if (agent.systemPrompt) {
-        // 直接传系统提示词（shell 自然会处理引号）
         piArgs.push("--append-system-prompt", agent.systemPrompt);
       }
 
-      // 工作目录：agent 指定的 cwd 或 env 中的 TERMX_CWD
+      // 工作目录
       const cwd = agent.cwd || process.env.TERMX_CWD || process.cwd();
-
-      // 1. 创建 pane
-      const dir = params.direction || 'down';
       const cmd = piArgs.join(" ");
       const fullCmd = cwd ? `cd "${cwd}" && ${cmd}` : cmd;
+
+      // 创建 pane（方向自动）
       const spawnResult = await api("/api/pane/spawn", {
         token: TOKEN, paneId,
         command: fullCmd,
-        direction: (dir === 'up' || dir === 'down') ? 'vertical' : 'horizontal',
       });
       if (!spawnResult.ok) return { content: [{ type: "text", text: `Error spawning: ${spawnResult.error}` }] };
       const targetPaneId = (spawnResult.data as any)?.paneId;
