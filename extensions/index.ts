@@ -62,7 +62,7 @@ export default function termxExtension(pi: ExtensionAPI) {
             "[TermX] You can delegate work to helper agents:",
             "  - termx_list_panes: see all helpers (status: idle/busy, label: what they do)",
             "  - Use idle helpers first, spawn more only when needed",
-            "  - Spawn: `termx pane spawn pi --dir down` (use --from <paneId> to split from another pane)",
+            "  - Spawn: `termx pane spawn pi` (auto layout, no flags)",
             "  - Tag: `termx pane label <paneId> <label>` to mark what a helper works on",
             "  - Delegate: termx_ask(targetPaneId, content) - include relevant code/context",
             "  - Replies arrive automatically",

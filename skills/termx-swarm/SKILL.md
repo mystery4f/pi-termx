@@ -36,7 +36,7 @@ Recognize these patterns and **proactively** delegate:
    ↓
 2a. Idle helper found → termx_ask(helperPaneId, taskWithContext)
    ↓
-2b. No idle helper → `termx pane spawn pi --model <model>` (bash)
+2b. No idle helper → `termx pane spawn pi` (bash)
                     → wait for pane to appear
                     → termx_list_panes → get new paneId
                     → termx_ask(newPaneId, taskWithContext)
@@ -47,12 +47,7 @@ Recognize these patterns and **proactively** delegate:
 
 ## Layout Management
 
-Avoid cramming too many panes into one tab:
-- **First helper**: `termx pane spawn pi --dir down`
-- **Second helper**: `termx pane spawn pi --dir right`
-- **Third+ helper**: `termx tab new` then `termx pane spawn pi --dir down` (fresh tab)
-- Never have more than 2-3 panes per tab — use new tabs for more helpers.
-- Use `--from <paneId>` to split from a wide empty pane rather than your own.
+`termx pane spawn pi` automatically picks the best pane and direction. Do NOT add `--dir` or `--from` — let the system handle it.
 
 ## Context When Delegating
 
