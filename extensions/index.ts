@@ -9,7 +9,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import WebSocket from "ws";
 import http from "node:http";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { discoverAgents, getAgent } from "./agents";
@@ -258,11 +258,8 @@ export default function termxExtension(pi: ExtensionAPI) {
       if (agent.thinkingLevel) piArgs.push("--thinking", agent.thinkingLevel);
       if (agent.tools?.length) piArgs.push("--tools", agent.tools.join(","));
       if (agent.systemPrompt) {
-        const tmpDir = join(homedir(), ".pi", "tmp");
-        if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
-        const tmpPath = join(tmpDir, `termx-agent-${agent.name}.txt`);
-        writeFileSync(tmpPath, agent.systemPrompt);
-        piArgs.push("--append-system-prompt-file", tmpPath);
+        // 直接传系统提示词（shell 自然会处理引号）
+        piArgs.push("--append-system-prompt", agent.systemPrompt);
       }
 
       // 1. 创建 pane
