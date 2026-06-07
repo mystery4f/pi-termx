@@ -144,6 +144,7 @@ export default function termxExtension(pi: ExtensionAPI) {
       targetPaneId: Type.String({ description: "Target pane ID" }),
       content: Type.String({ description: "Message" }),
       wait: Type.Optional(Type.Boolean({ description: "Block until reply (default: false)" })),
+      timeout: Type.Optional(Type.Number({ description: "Max wait time in ms (default: 120000 = 2 min)" })),
       replyTo: Type.Optional(Type.String({ description: "Reply to this message ID" })),
     }),
     async execute(_id, params, signal) {
@@ -168,14 +169,15 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // sync → 连 WS 等回复
       const msgId = (result.data as any)?.id;
+      const timeoutMs = params.timeout || 120_000;
       return new Promise((resolve) => {
         const wsAsk = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
         const timer = setTimeout(() => {
           wsAsk.close();
-          resolve({ content: [{ type: "text", text: "Timed out - no reply" }] });
-        }, 300_000);
+          resolve({ content: [{ type: "text", text: `Timed out after ${timeoutMs / 1000}s — no reply` }] });
+        }, timeoutMs);
 
-        signal?.addEventListener("abort", () => { clearTimeout(timer); wsAsk.close(); });
+        signal?.addEventListener("abort", () => { clearTimeout(timer); wsAsk.close(); resolve({ content: [{ type: "text", text: "Cancelled" }] }); });
 
         wsAsk.on("open", () => wsAsk.send(JSON.stringify({ type: "listen", paneId, token: TOKEN })));
         wsAsk.on("message", (raw) => {
