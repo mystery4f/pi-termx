@@ -82,7 +82,7 @@ export default function termxExtension(pi: ExtensionAPI) {
               content: [
                 `📩 ${msg.from.slice(0, 8)} [${msg.id}]`,
                 `"${msg.content}"`,
-                `→ Reply: termx_ask(targetPaneId="${msg.from}", content="...", replyTo="${msg.id}", async=true)`,
+                `→ Reply: termx_ask(targetPaneId="${msg.from}", content="...", replyTo="${msg.id}")`,
               ].join("\n"),
               display: true,
               details: msg,
@@ -139,17 +139,17 @@ export default function termxExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "termx_ask",
     label: "Send / Ask / Reply",
-    description: "Send a message to another pane. Default: blocks until reply. Set async=true to fire-and-forget. Set replyTo to reply to a message.",
+    description: "Send a message to another pane. Async by default (returns immediately). Set wait=true to block until reply. Set replyTo to reply to a message.",
     parameters: Type.Object({
       targetPaneId: Type.String({ description: "Target pane ID" }),
       content: Type.String({ description: "Message" }),
-      async: Type.Optional(Type.Boolean({ description: "Return immediately (default: false, blocks until reply)" })),
+      wait: Type.Optional(Type.Boolean({ description: "Block until reply (default: false)" })),
       replyTo: Type.Optional(Type.String({ description: "Reply to this message ID" })),
     }),
     async execute(_id, params, signal) {
       // 选 endpoint
-      const isAsync = params.async || params.replyTo;
-      const endpoint = params.replyTo ? "/api/msg/reply" : isAsync ? "/api/msg/send" : "/api/msg/ask";
+      const isSync = params.wait && !params.replyTo;
+      const endpoint = params.replyTo ? "/api/msg/reply" : isSync ? "/api/msg/ask" : "/api/msg/send";
 
       const body: Record<string, unknown> = {
         token: TOKEN, paneId,
@@ -161,8 +161,8 @@ export default function termxExtension(pi: ExtensionAPI) {
       const result = await api(endpoint, body);
       if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
 
-      // async / reply → 直接返回
-      if (isAsync) {
+      // reply / async → 直接返回
+      if (!isSync) {
         return { content: [{ type: "text", text: params.replyTo ? "Replied" : `Sent (id: ${(result.data as any)?.id})` }] };
       }
 
