@@ -1,0 +1,15 @@
+{
+  "name": "pi-termx",
+  "version": "0.1.0",
+  "description": "Pi Extension for TermX — agent communication and parallel task delegation",
+  "keywords": ["pi-package"],
+  "author": "mystery4f",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
