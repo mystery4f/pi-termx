@@ -267,10 +267,11 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // 1. 创建 pane
       const dir = params.direction || 'down';
+      const cmd = piArgs.join(" ");
+      const fullCmd = cwd ? `cd "${cwd}" && ${cmd}` : cmd;
       const spawnResult = await api("/api/pane/spawn", {
         token: TOKEN, paneId,
-        command: piArgs.join(" "),
-        cwd,
+        command: fullCmd,
         direction: (dir === 'up' || dir === 'down') ? 'vertical' : 'horizontal',
       });
       if (!spawnResult.ok) return { content: [{ type: "text", text: `Error spawning: ${spawnResult.error}` }] };
