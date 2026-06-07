@@ -12,6 +12,7 @@ export interface AgentConfig {
   thinkingLevel?: string;
   tools?: string[];
   systemPrompt: string;
+  cwd?: string;
   source: "user" | "project";
 }
 
@@ -49,6 +50,7 @@ function discoverDir(dir: string, source: "user" | "project"): AgentConfig[] {
         thinkingLevel: data.thinkingLevel,
         tools: data.tools ? data.tools.split(",").map((t) => t.trim()) : undefined,
         systemPrompt: body,
+        cwd: data.cwd,
         source,
       });
     } catch { /* skip invalid files */ }

@@ -262,11 +262,15 @@ export default function termxExtension(pi: ExtensionAPI) {
         piArgs.push("--append-system-prompt", agent.systemPrompt);
       }
 
+      // 工作目录：agent 指定的 cwd 或 env 中的 TERMX_CWD
+      const cwd = agent.cwd || process.env.TERMX_CWD || process.cwd();
+
       // 1. 创建 pane
       const dir = params.direction || 'down';
       const spawnResult = await api("/api/pane/spawn", {
         token: TOKEN, paneId,
         command: piArgs.join(" "),
+        cwd,
         direction: (dir === 'up' || dir === 'down') ? 'vertical' : 'horizontal',
       });
       if (!spawnResult.ok) return { content: [{ type: "text", text: `Error spawning: ${spawnResult.error}` }] };
