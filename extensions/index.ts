@@ -9,6 +9,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import WebSocket from "ws";
 import http from "node:http";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { discoverAgents, getAgent } from "./agents";
 
 const PORT = process.env.TERMX_PORT;
@@ -222,9 +225,19 @@ export default function termxExtension(pi: ExtensionAPI) {
       const agent = getAgent(params.name);
       if (!agent) return { content: [{ type: "text", text: `Agent "${params.name}" not found. Use termx_list_agents to see available agents.` }] };
 
+      // 解析 model: 如果是 "default" → 读用户实际默认
+      let model = agent.model;
+      if (!model || model === "default") {
+        try {
+          const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
+          const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+          model = settings.defaultModel;
+        } catch { /* use settings default */ }
+      }
+
       // 构建 pi 命令
       const piArgs: string[] = ["pi"];
-      if (agent.model) piArgs.push("--model", agent.model);
+      if (model) piArgs.push("--model", model);
       if (agent.thinkingLevel) piArgs.push("--thinking", agent.thinkingLevel);
       if (agent.tools?.length) piArgs.push("--tools", agent.tools.join(","));
       if (agent.systemPrompt) piArgs.push("--append-system-prompt", JSON.stringify(agent.systemPrompt));
