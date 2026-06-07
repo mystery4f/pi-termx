@@ -62,7 +62,7 @@ export default function termxExtension(pi: ExtensionAPI) {
             "[TermX] You can delegate work to helper agents:",
             "  - termx_list_panes: see all helpers (status: idle/busy, label: what they do)",
             "  - Use idle helpers first, spawn more only when needed",
-            "  - Spawn: `termx pane spawn pi` (uses your default model, no --model needed)",
+            "  - Spawn: `termx pane spawn pi` (uses default model, add --dir down/right)",
             "  - Tag: `termx pane label <paneId> <label>` to mark what a helper works on",
             "  - Delegate: termx_ask(targetPaneId, content) - include relevant code/context",
             "  - Replies arrive automatically",
@@ -222,12 +222,13 @@ export default function termxExtension(pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "Agent name from termx_list_agents" }),
       task: Type.Optional(Type.String({ description: "Task to send to the agent after spawning" })),
+      direction: Type.Optional(Type.String({ description: "Split direction: right or down (default: right)" })),
     }),
     async execute(_id, params) {
       const agent = getAgent(params.name);
       if (!agent) return { content: [{ type: "text", text: `Agent "${params.name}" not found. Use termx_list_agents to see available agents.` }] };
 
-      // 解析 model: 如果是 "default" → 读用户实际默认
+      // 解析 model
       let model = agent.model;
       if (!model || model === "default") {
         try {
@@ -245,9 +246,11 @@ export default function termxExtension(pi: ExtensionAPI) {
       if (agent.systemPrompt) piArgs.push("--append-system-prompt", JSON.stringify(agent.systemPrompt));
 
       // 1. 创建 pane
+      const dir = params.direction || 'down';
       const spawnResult = await api("/api/pane/spawn", {
         token: TOKEN, paneId,
         command: piArgs.join(" "),
+        direction: (dir === 'up' || dir === 'down') ? 'vertical' : 'horizontal',
       });
       if (!spawnResult.ok) return { content: [{ type: "text", text: `Error spawning: ${spawnResult.error}` }] };
       const targetPaneId = (spawnResult.data as any)?.paneId;
