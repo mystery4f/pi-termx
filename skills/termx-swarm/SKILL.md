@@ -84,13 +84,14 @@ Set your own label so others can find you: `termx_set_label("auth module refacto
 
 ## Model Selection
 
-When spawning, choose the right model for the job:
+When spawning, the new pi will use your default model unless you specify otherwise. Only override model for specific needs:
 
 ```bash
-termx pane spawn pi --model gpt-4o-mini       # Simple, fast, cheap
-termx pane spawn pi --model claude-sonnet-4    # Complex reasoning
-termx pane spawn pi --model gemini-2.5-flash   # Image understanding (if available)
+termx pane spawn pi                              # uses your default model
+termx pane spawn pi --model <model>              # use a specific model (only if you know it's configured)
 ```
+
+Do NOT guess model names — use the default or ask the user which model to use.
 
 ## Status Management
 

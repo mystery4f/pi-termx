@@ -9,6 +9,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import WebSocket from "ws";
 import http from "node:http";
+import { discoverAgents, getAgent } from "./agents";
 
 const PORT = process.env.TERMX_PORT;
 const TOKEN = process.env.TERMX_TOKEN;
@@ -185,6 +186,80 @@ export default function termxExtension(pi: ExtensionAPI) {
         });
         wsAsk.on("error", () => { clearTimeout(timer); resolve({ content: [{ type: "text", text: "Ask failed" }] }); });
       });
+    },
+  });
+
+  // ── termx_list_agents ──
+
+  pi.registerTool({
+    name: "termx_list_agents",
+    label: "List Available Agents",
+    description: "List all configured agents from .pi/agents/*.md files. Each agent has a name, description, and optional model/thinking settings.",
+    parameters: Type.Object({}),
+    async execute() {
+      const agents = discoverAgents().map((a) => ({
+        name: a.name,
+        description: a.description,
+        model: a.model || "(default)",
+        thinkingLevel: a.thinkingLevel || "(default)",
+        source: a.source,
+      }));
+      return { content: [{ type: "text", text: JSON.stringify(agents, null, 2) }] };
+    },
+  });
+
+  // ── termx_spawn_agent ──
+
+  pi.registerTool({
+    name: "termx_spawn_agent",
+    label: "Spawn Agent",
+    description: "Spawn a configured agent in a new TermX pane and optionally send a task. The agent's model, thinking level, and system prompt are read from .pi/agents/*.md.",
+    parameters: Type.Object({
+      name: Type.String({ description: "Agent name from termx_list_agents" }),
+      task: Type.Optional(Type.String({ description: "Task to send to the agent after spawning" })),
+    }),
+    async execute(_id, params) {
+      const agent = getAgent(params.name);
+      if (!agent) return { content: [{ type: "text", text: `Agent "${params.name}" not found. Use termx_list_agents to see available agents.` }] };
+
+      // 构建 pi 命令
+      const piArgs: string[] = ["pi"];
+      if (agent.model) piArgs.push("--model", agent.model);
+      if (agent.thinkingLevel) piArgs.push("--thinking", agent.thinkingLevel);
+      if (agent.tools?.length) piArgs.push("--tools", agent.tools.join(","));
+      if (agent.systemPrompt) piArgs.push("--append-system-prompt", JSON.stringify(agent.systemPrompt));
+
+      // 1. 创建 pane
+      const spawnResult = await api("/api/pane/spawn", {
+        token: TOKEN, paneId,
+        command: piArgs.join(" "),
+      });
+      if (!spawnResult.ok) return { content: [{ type: "text", text: `Error spawning: ${spawnResult.error}` }] };
+      const targetPaneId = (spawnResult.data as any)?.paneId;
+      if (!targetPaneId) return { content: [{ type: "text", text: "Spawned but no paneId returned" }] };
+
+      // 2. 等 shell 启动
+      await new Promise((r) => setTimeout(r, 2500));
+
+      // 3. 发任务
+      if (params.task) {
+        const askResult = await api("/api/msg/send", {
+          token: TOKEN, paneId,
+          targetPaneId,
+          content: params.task,
+        });
+        if (!askResult.ok) {
+          return { content: [{ type: "text", text: `Spawned ${params.name} at ${targetPaneId.slice(0, 8)}, but failed to send task: ${askResult.error}` }] };
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `Spawned ${params.name}${agent.model ? ` (${agent.model})` : ""} at pane ${targetPaneId.slice(0, 8)}${params.task ? ` with task` : ""}`,
+        }],
+        details: { paneId: targetPaneId, agent: params.name },
+      };
     },
   });
 }
