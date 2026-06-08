@@ -62,9 +62,6 @@ export default function termxExtension(pi: ExtensionAPI) {
   let ws: WebSocket | null = null;
   let paneId = PANE_ID;
 
-  /** 待注入系统提示词的频道消息（before_agent_start 时消费） */
-  const pendingSystemMessages: string[] = [];
-
   // ── WS 收消息 ──
 
   pi.on("session_start", async () => {
@@ -73,52 +70,43 @@ export default function termxExtension(pi: ExtensionAPI) {
       ws.on("open", () => {
         ws!.send(JSON.stringify({ type: "listen", paneId, token: TOKEN }));
         ws!.send(JSON.stringify({ type: "listen-channel", paneId, token: TOKEN }));
-
-        // 注入:告诉模型可以并行派活
-        pi.sendMessage({
-          customType: "termx-init",
-          content: [
-            "[TermX] You are in a TermX workspace with other agents.",
-            "",
-            "CHANNELS:",
-            "  - You are auto-joined to #general (full mode) — use it to broadcast to ALL agents.",
-            "  - termx_broadcast(channelId=\"ch-1\", content=\"...\") — send to #general (ch-1 is the default channel)",
-            "  - termx_broadcast(targetPaneIds=[...], content=\"...\") — temporary broadcast to specific panes",
-            "  - termx_channel(action='list') — see all channels; action='create' to make new ones",
-            "",
-            "1v1 MESSAGING:",
-            "  - termx_list_panes: see all helpers (status: idle/busy, label: what they do)",
-            "  - termx_ask(targetPaneId, content) — send/ask/reply to one agent",
-            "  - termx_spawn_agent(name, task) — spawn a configured agent in a new pane",
-            "  - termx_set_label(label) — tag yourself for expert discovery",
-          ].join("\n"),
-          display: false,
-        }, { triggerTurn: false });
       });
       ws.on("message", (raw) => {
         try {
           const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown>; channelId?: string; channelMessage?: { id: string; from: string; content: string }; msgId?: string; reply?: { from: string; content: string } };
 
-          // 频道消息 → 存入队列，下一轮注入系统提示词
+          // 频道消息 → 作为用户消息注入
           if (envelope.type === "channel-message" && envelope.channelMessage) {
             const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
             const isAsk = chMsg.channelMessage.type === 'ask';
-            pendingSystemMessages.push([
-              isAsk
-                ? `📢❓ #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)} [ASK — reply expected]:`
-                : `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
-              `"${chMsg.channelMessage.content}"`,
-              `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
-            ].join("\n"));
-            pi.sendMessage({ customType: "termx-trigger", content: ".", display: false }, { triggerTurn: true });
+            pi.sendMessage(
+              {
+                customType: "termx-channel-message",
+                content: [
+                  isAsk
+                    ? `📢❓ #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)} [ASK — reply expected]:`
+                    : `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
+                  `"${chMsg.channelMessage.content}"`,
+                  `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
+                ].join("\n"),
+                display: false,
+              },
+              { triggerTurn: true },
+            );
             return;
           }
 
-          // 频道回复 → 存入队列
+          // 频道回复 → 作为用户消息注入
           if (envelope.type === "channel-reply" && envelope.reply) {
             const chReply = envelope as typeof envelope & { channelId: string; msgId: string; reply: { from: string; content: string } };
-            pendingSystemMessages.push(`📢 #${chReply.channelId} reply to [${chReply.msgId}] from ${chReply.reply.from.slice(0, 8)}: "${chReply.reply.content}"`);
-            pi.sendMessage({ customType: "termx-trigger", content: ".", display: false }, { triggerTurn: true });
+            pi.sendMessage(
+              {
+                customType: "termx-channel-reply",
+                content: `📢 #${chReply.channelId} reply to [${chReply.msgId}] from ${chReply.reply.from.slice(0, 8)}: "${chReply.reply.content}"`,
+                display: false,
+              },
+              { triggerTurn: true },
+            );
             return;
           }
 
@@ -150,22 +138,30 @@ export default function termxExtension(pi: ExtensionAPI) {
 
   // 自动标状态
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // 静态 TermX 使用说明（每次都相同 → 系统提示词 hash 不变 → 缓存有效）
+  const TERMX_USAGE_BLOCK = [
+    "",
+    "## TermX Workspace",
+    "You are in a TermX workspace with other agents. You are auto-joined to #general (full mode).",
+    "",
+    "CHANNELS (group communication):",
+    "  - termx_broadcast(channelId=\"ch-1\", content=\"...\") — broadcast to #general",
+    "  - termx_broadcast(targetPaneIds=[...], content=\"...\") — temporary broadcast to specific panes",
+    "  - termx_channel(action='list') — see all channels; action='create' to make new ones",
+    "  - Channel messages arrive as user messages — respond when appropriate",
+    "",
+    "1v1 MESSAGING:",
+    "  - termx_list_panes — see all helpers (status: idle/busy, label: what they do)",
+    "  - termx_ask(targetPaneId, content) — send/ask/reply to one agent",
+    "  - termx_spawn_agent(name, task) — spawn a configured agent in a new pane",
+    "  - termx_set_label(label) — tag yourself for expert discovery",
+  ].join("\n");
+
   pi.on("before_agent_start", async (event) => {
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, status: "busy" }).catch(() => {});
-
-    // 注入待处理的频道消息到系统提示词
-    if (pendingSystemMessages.length > 0) {
-      const msgs = pendingSystemMessages.splice(0);
-      const block = [
-        "",
-        "## Channel Messages",
-        "The following messages arrived from TermX channels. Respond if needed.",
-        "",
-        ...msgs,
-      ].join("\n");
-      return { systemPrompt: event.systemPrompt + "\n" + block };
-    }
+    return { systemPrompt: event.systemPrompt + TERMX_USAGE_BLOCK };
   });
   pi.on("turn_end", async () => {
     // 延迟 5s——如果新一轮马上开始就取消，否则才标 idle
