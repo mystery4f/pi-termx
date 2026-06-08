@@ -62,12 +62,6 @@ export default function termxExtension(pi: ExtensionAPI) {
   let ws: WebSocket | null = null;
   let paneId = PANE_ID;
 
-  // 频道消息防抖合并队列（分类型）
-  const pendingBroadcasts: string[] = [];
-  const pendingAsks: string[] = [];
-  let broadcastTimer: ReturnType<typeof setTimeout> | null = null;
-  let askTimer: ReturnType<typeof setTimeout> | null = null;
-
   // ── WS 收消息 ──
 
   pi.on("session_start", async () => {
@@ -85,26 +79,33 @@ export default function termxExtension(pi: ExtensionAPI) {
           if (envelope.type === "channel-message" && envelope.channelMessage) {
             const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
             const tag = chMsg.channelMessage.type === 'ask' ? " (reply expected)" : "";
-            const text = [
-              `📢 #${chMsg.channelId} ${chMsg.channelMessage.from.slice(0, 8)} [${chMsg.channelMessage.id}]${tag}`,
-              `"${chMsg.channelMessage.content}"`,
-              `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
-            ].join("\n");
-            if (chMsg.channelMessage.type === 'ask') {
-              pendingAsks.push(text);
-              scheduleFlushAsk();
-            } else {
-              pendingBroadcasts.push(text);
-              scheduleFlushBroadcast();
-            }
+            const customType = chMsg.channelMessage.type === 'ask' ? "termx-channel-ask" : "termx-channel-broadcast";
+            pi.sendMessage(
+              {
+                customType,
+                content: [
+                  `📢 #${chMsg.channelId} ${chMsg.channelMessage.from.slice(0, 8)} [${chMsg.channelMessage.id}]${tag}`,
+                  `"${chMsg.channelMessage.content}"`,
+                  `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
+                ].join("\n"),
+                display: true,
+              },
+              { triggerTurn: true },
+            );
             return;
           }
 
-          // 频道回复 → 入广播队列
+          // 频道回复
           if (envelope.type === "channel-reply" && envelope.reply) {
             const chReply = envelope as typeof envelope & { channelId: string; msgId: string; reply: { from: string; content: string } };
-            pendingBroadcasts.push(`📢 #${chReply.channelId} ${chReply.reply.from.slice(0, 8)} [${chReply.msgId}] reply: "${chReply.reply.content}"`);
-            scheduleFlushBroadcast();
+            pi.sendMessage(
+              {
+                customType: "termx-channel-broadcast",
+                content: `📢 #${chReply.channelId} ${chReply.reply.from.slice(0, 8)} [${chReply.msgId}] reply: "${chReply.reply.content}"`,
+                display: true,
+              },
+              { triggerTurn: true },
+            );
             return;
           }
 
@@ -132,39 +133,7 @@ export default function termxExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     if (ws) { ws.close(); ws = null; }
-    if (broadcastTimer) { clearTimeout(broadcastTimer); broadcastTimer = null; }
-    if (askTimer) { clearTimeout(askTimer); askTimer = null; }
-    pendingBroadcasts.length = 0;
-    pendingAsks.length = 0;
   });
-
-  /** 防抖合并广播/回复 (customType: termx-channel-broadcast) */
-  function scheduleFlushBroadcast(): void {
-    if (broadcastTimer) clearTimeout(broadcastTimer);
-    broadcastTimer = setTimeout(() => {
-      broadcastTimer = null;
-      const msgs = pendingBroadcasts.splice(0);
-      if (msgs.length === 0) return;
-      pi.sendMessage(
-        { customType: "termx-channel-broadcast", content: msgs.join("\n---\n"), display: true },
-        { triggerTurn: true },
-      );
-    }, 300);
-  }
-
-  /** 防抖合并 ask (customType: termx-channel-ask) */
-  function scheduleFlushAsk(): void {
-    if (askTimer) clearTimeout(askTimer);
-    askTimer = setTimeout(() => {
-      askTimer = null;
-      const msgs = pendingAsks.splice(0);
-      if (msgs.length === 0) return;
-      pi.sendMessage(
-        { customType: "termx-channel-ask", content: msgs.join("\n---\n"), display: true },
-        { triggerTurn: true },
-      );
-    }, 300);
-  }
 
   // 自动标状态
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
