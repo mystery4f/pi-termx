@@ -86,6 +86,7 @@ export default function termxExtension(pi: ExtensionAPI) {
       ws.on("message", (raw) => {
         try {
           const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown> };
+          writeFileSync("D:/termx-ws-msg.txt", `Received: type=${envelope.type}, to=${envelope.message?.to}, myPaneId=${paneId}\n`);
           if (envelope.type !== "message" || !envelope.message || envelope.message.to !== paneId) return;
           const msg = envelope.message as { id: string; from: string; content: string; replyTo?: string };
 
@@ -304,14 +305,14 @@ export default function termxExtension(pi: ExtensionAPI) {
           content: params.task,
         });
         if (!askResult.ok) {
-          return { content: [{ type: "text", text: `Spawned ${params.name} at ${targetPaneId.slice(0, 8)}, but failed to send task: ${askResult.error}` }] };
+          return { content: [{ type: "text", text: `Spawned ${params.name} at ${targetPaneId}, but failed to send task: ${askResult.error}` }] };
         }
       }
 
       return {
         content: [{
           type: "text",
-          text: `Spawned ${params.name}${agent.model ? ` (${agent.model})` : ""} at pane ${targetPaneId.slice(0, 8)}${params.task ? ` with task` : ""}`,
+          text: `Spawned ${params.name}${agent.model ? ` (${agent.model})` : ""} at pane ${targetPaneId}${params.task ? ` with task` : ""}. Use this full ID for termx_ask.`,
         }],
         details: { paneId: targetPaneId, agent: params.name },
       };
