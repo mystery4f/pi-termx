@@ -62,6 +62,9 @@ export default function termxExtension(pi: ExtensionAPI) {
   let ws: WebSocket | null = null;
   let paneId = PANE_ID;
 
+  /** 待注入系统提示词的频道消息（before_agent_start 时消费） */
+  const pendingSystemMessages: string[] = [];
+
   // ── WS 收消息 ──
 
   pi.on("session_start", async () => {
@@ -96,40 +99,26 @@ export default function termxExtension(pi: ExtensionAPI) {
         try {
           const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown>; channelId?: string; channelMessage?: { id: string; from: string; content: string }; msgId?: string; reply?: { from: string; content: string } };
 
-          // 频道消息
+          // 频道消息 → 存入队列，下一轮注入系统提示词
           if (envelope.type === "channel-message" && envelope.channelMessage) {
             const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
             const isAsk = chMsg.channelMessage.type === 'ask';
-            pi.sendMessage(
-              {
-                customType: "termx-channel-message",
-                content: [
-                  isAsk
-                    ? `📢❓ #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)} [ASK — reply expected]:`
-                    : `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
-                  `"${chMsg.channelMessage.content}"`,
-                  `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
-                ].join("\n"),
-                display: true,
-                details: chMsg,
-              },
-              { triggerTurn: true },
-            );
+            pendingSystemMessages.push([
+              isAsk
+                ? `📢❓ #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)} [ASK — reply expected]:`
+                : `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
+              `"${chMsg.channelMessage.content}"`,
+              `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
+            ].join("\n"));
+            pi.sendMessage({ customType: "termx-trigger", content: ".", display: false }, { triggerTurn: true });
             return;
           }
 
-          // 频道回复
+          // 频道回复 → 存入队列
           if (envelope.type === "channel-reply" && envelope.reply) {
-            const chReply = envelope;
-            pi.sendMessage(
-              {
-                customType: "termx-channel-reply",
-                content: `📢 #${chReply.channelId} reply to [${chReply.msgId}] from ${chReply.reply.from.slice(0, 8)}: "${chReply.reply.content}"`,
-                display: true,
-                details: chReply,
-              },
-              { triggerTurn: true },
-            );
+            const chReply = envelope as typeof envelope & { channelId: string; msgId: string; reply: { from: string; content: string } };
+            pendingSystemMessages.push(`📢 #${chReply.channelId} reply to [${chReply.msgId}] from ${chReply.reply.from.slice(0, 8)}: "${chReply.reply.content}"`);
+            pi.sendMessage({ customType: "termx-trigger", content: ".", display: false }, { triggerTurn: true });
             return;
           }
 
@@ -161,9 +150,22 @@ export default function termxExtension(pi: ExtensionAPI) {
 
   // 自动标状态
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
-  pi.on("before_agent_start", async () => {
+  pi.on("before_agent_start", async (event) => {
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, status: "busy" }).catch(() => {});
+
+    // 注入待处理的频道消息到系统提示词
+    if (pendingSystemMessages.length > 0) {
+      const msgs = pendingSystemMessages.splice(0);
+      const block = [
+        "",
+        "## Channel Messages",
+        "The following messages arrived from TermX channels. Respond if needed.",
+        "",
+        ...msgs,
+      ].join("\n");
+      return { systemPrompt: event.systemPrompt + "\n" + block };
+    }
   });
   pi.on("turn_end", async () => {
     // 延迟 5s——如果新一轮马上开始就取消，否则才标 idle
