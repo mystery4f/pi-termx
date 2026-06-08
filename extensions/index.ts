@@ -63,6 +63,7 @@ export default function termxExtension(pi: ExtensionAPI) {
       ws = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
       ws.on("open", () => {
         ws!.send(JSON.stringify({ type: "listen", paneId, token: TOKEN }));
+        ws!.send(JSON.stringify({ type: "listen-channel", paneId, token: TOKEN }));
 
         // 注入:告诉模型可以并行派活
         pi.sendMessage({
@@ -75,13 +76,52 @@ export default function termxExtension(pi: ExtensionAPI) {
             "  - Tag: `termx pane label <paneId> <label>` to mark what a helper works on",
             "  - Delegate: termx_ask(targetPaneId, content) - include relevant code/context",
             "  - Replies arrive automatically",
+            "  - Channels: termx_channel(action='list') to see channels, auto-joined #general",
+            "  - Broadcast: termx_broadcast(channelId=..., content=...) to send to a channel",
+            "  - Temporary: termx_broadcast(targetPaneIds=[...], content=...) for one-time broadcast",
           ].join("\n"),
           display: false,
         }, { triggerTurn: false });
       });
       ws.on("message", (raw) => {
         try {
-          const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown> };
+          const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown>; channelId?: string; channelMessage?: { id: string; from: string; content: string }; msgId?: string; reply?: { from: string; content: string } };
+
+          // 频道消息
+          if (envelope.type === "channel-message" && envelope.channelMessage) {
+            const chMsg = envelope;
+            pi.sendMessage(
+              {
+                customType: "termx-channel-message",
+                content: [
+                  `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
+                  `"${chMsg.channelMessage.content}"`,
+                  `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
+                ].join("\n"),
+                display: true,
+                details: chMsg,
+              },
+              { triggerTurn: true },
+            );
+            return;
+          }
+
+          // 频道回复
+          if (envelope.type === "channel-reply" && envelope.reply) {
+            const chReply = envelope;
+            pi.sendMessage(
+              {
+                customType: "termx-channel-reply",
+                content: `📢 #${chReply.channelId} reply to [${chReply.msgId}] from ${chReply.reply.from.slice(0, 8)}: "${chReply.reply.content}"`,
+                display: true,
+                details: chReply,
+              },
+              { triggerTurn: true },
+            );
+            return;
+          }
+
+          // 1v1 消息
           if (envelope.type !== "message" || !envelope.message || envelope.message.to !== paneId) return;
           const msg = envelope.message as { id: string; from: string; content: string; replyTo?: string };
 
@@ -311,6 +351,145 @@ export default function termxExtension(pi: ExtensionAPI) {
         }],
         details: { paneId: targetPaneId, agent: params.name },
       };
+    },
+  });
+
+  // ── termx_channel ──
+
+  pi.registerTool({
+    name: "termx_channel",
+    label: "Channel Management",
+    description: "Manage group chat channels. Actions: create, join, leave, list, info. Channels let multiple agents communicate in a shared space. The #general channel is auto-created and all panes auto-join it.",
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("create", { description: "Create a new channel" }),
+        Type.Literal("join", { description: "Join an existing channel" }),
+        Type.Literal("leave", { description: "Leave a channel" }),
+        Type.Literal("list", { description: "List all channels" }),
+        Type.Literal("info", { description: "Get channel details and recent messages" }),
+      ]),
+      channelId: Type.Optional(Type.String({ description: "Channel ID (required for join/leave/info)" })),
+      name: Type.Optional(Type.String({ description: "Channel name (required for create)" })),
+      mode: Type.Optional(Type.Union([Type.Literal("full"), Type.Literal("pubsub")], { description: "Visibility mode: full=all members see replies, pubsub=only sender sees replies. Default: full" })),
+    }),
+    async execute(_id, params) {
+      const body: Record<string, unknown> = { token: TOKEN, paneId };
+
+      switch (params.action) {
+        case "create": {
+          if (!params.name) return { content: [{ type: "text", text: "Error: name is required for create" }] };
+          body.name = params.name;
+          if (params.mode) body.mode = params.mode;
+          const result = await api("/api/channel/create", body);
+          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+          const data = result.data as { channelId: string; name: string; mode: string };
+          return { content: [{ type: "text", text: `Channel created: ${data.channelId} (#${data.name}, ${data.mode} mode)` }] };
+        }
+        case "join": {
+          if (!params.channelId) return { content: [{ type: "text", text: "Error: channelId is required for join" }] };
+          body.channelId = params.channelId;
+          const result = await api("/api/channel/join", body);
+          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+          return { content: [{ type: "text", text: `Joined channel ${params.channelId}` }] };
+        }
+        case "leave": {
+          if (!params.channelId) return { content: [{ type: "text", text: "Error: channelId is required for leave" }] };
+          body.channelId = params.channelId;
+          const result = await api("/api/channel/leave", body);
+          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+          return { content: [{ type: "text", text: `Left channel ${params.channelId}` }] };
+        }
+        case "list": {
+          const result = await api("/api/channel/list", body);
+          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+          return { content: [{ type: "text", text: JSON.stringify((result.data as any).channels, null, 2) }] };
+        }
+        case "info": {
+          if (!params.channelId) return { content: [{ type: "text", text: "Error: channelId is required for info" }] };
+          body.channelId = params.channelId;
+          const result = await api("/api/channel/info", body);
+          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+          return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+        }
+      }
+    },
+  });
+
+  // ── termx_broadcast ──
+
+  pi.registerTool({
+    name: "termx_broadcast",
+    label: "Broadcast to Channel or Panes",
+    description: "Send a message to a channel or to specific panes (temporary broadcast). Set waitMin > 0 to block until enough replies arrive. Channel mode determines who sees replies (full=all members, pubsub=only sender).",
+    parameters: Type.Object({
+      channelId: Type.Optional(Type.String({ description: "Channel ID to broadcast to (mutually exclusive with targetPaneIds)" })),
+      targetPaneIds: Type.Optional(Type.Array(Type.String(), { description: "Pane IDs for temporary broadcast (mutually exclusive with channelId)" })),
+      content: Type.String({ description: "Message content" }),
+      waitMin: Type.Optional(Type.Number({ description: "Minimum replies to wait for (0 = async, default). Only works with channelId." })),
+      timeout: Type.Optional(Type.Number({ description: "Max wait time in ms (default: 120000)" })),
+    }),
+    async execute(_id, params, signal) {
+      // 临时广播：targetPaneIds 模式
+      if (params.targetPaneIds && params.targetPaneIds.length > 0) {
+        let sent = 0;
+        for (const targetId of params.targetPaneIds) {
+          const result = await api("/api/msg/send", {
+            token: TOKEN, paneId,
+            targetPaneId: targetId,
+            content: params.content,
+          });
+          if (result.ok) sent++;
+        }
+        return { content: [{ type: "text", text: `Broadcast sent to ${sent}/${params.targetPaneIds.length} panes` }] };
+      }
+
+      // 频道广播
+      if (!params.channelId) {
+        return { content: [{ type: "text", text: "Error: provide either channelId or targetPaneIds" }] };
+      }
+
+      const result = await api("/api/channel/broadcast", {
+        token: TOKEN, paneId,
+        channelId: params.channelId,
+        content: params.content,
+      });
+      if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+
+      const msgId = (result.data as any)?.msgId;
+
+      // 异步模式
+      if (!params.waitMin || params.waitMin <= 0) {
+        return { content: [{ type: "text", text: `Broadcast sent to channel ${params.channelId} (msg: ${msgId})` }] };
+      }
+
+      // 同步等待回复
+      const timeoutMs = params.timeout || 120_000;
+      return new Promise((resolve) => {
+        const wsBroadcast = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
+        const timer = setTimeout(() => {
+          wsBroadcast.close();
+          resolve({ content: [{ type: "text", text: `Timed out after ${timeoutMs / 1000}s waiting for replies` }] });
+        }, timeoutMs);
+        const replies: string[] = [];
+
+        signal?.addEventListener("abort", () => { clearTimeout(timer); wsBroadcast.close(); resolve({ content: [{ type: "text", text: "Cancelled" }] }); });
+
+        wsBroadcast.on("open", () => wsBroadcast.send(JSON.stringify({ type: "listen-channel", paneId, token: TOKEN })));
+        wsBroadcast.on("message", (raw) => {
+          try {
+            const m = JSON.parse(raw.toString()) as { type: string; channelId?: string; msgId?: string; reply?: { from: string; content: string } };
+            if (m.type === "channel-reply" && m.channelId === params.channelId && m.msgId === msgId && m.reply) {
+              replies.push(`${m.reply.from.slice(0, 8)}: ${m.reply.content}`);
+              if (replies.length >= params.waitMin!) {
+                clearTimeout(timer);
+                wsBroadcast.close();
+                resolve({ content: [{ type: "text", text: `Received ${replies.length}/${params.waitMin} replies:\n${replies.join("\n")}` }] });
+              }
+            }
+          } catch { /* ignore */ }
+        });
+        wsBroadcast.on("error", () => { clearTimeout(timer); resolve({ content: [{ type: "text", text: "Broadcast wait failed" }] }); });
+      });
     },
   });
 }
