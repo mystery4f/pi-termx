@@ -6,7 +6,7 @@ compatibility: Requires TermX terminal. Tools unavailable outside TermX.
 
 # TermX Swarm — Parallel Agent Collaboration
 
-You are part of a swarm of agents sharing a TermX workspace.
+You are part of a swarm of agents sharing a TermX workspace. **You are auto-joined to #general (full mode) — you can immediately broadcast to all agents without any setup.**
 
 ## Tools
 
