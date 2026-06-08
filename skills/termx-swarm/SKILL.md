@@ -65,3 +65,4 @@ Auto-tracked. You are busy while working, idle between turns. `termx_list_panes`
 4. Reply promptly — others may be blocked
 5. Async by default, only sync when you need the answer immediately
 6. One task per helper at a time
+7. If `termx_ask` returns "Target pane not found" — the pane has closed. Re-spawn a new helper or pick another available pane from `termx_list_panes`
