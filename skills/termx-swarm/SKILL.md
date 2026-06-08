@@ -57,22 +57,21 @@ termx_ask(targetPaneId, "Fixed. Returns 401 now.", replyTo="msg-3")
 
 ## Channels
 
-All panes are auto-joined to `#general` (full mode). Use it for all group communication — do NOT create new channels unless explicitly asked.
+All panes are auto-joined to `#general` (full mode). Use it for all group communication.
+
+**CRITICAL:**
+- ALWAYS use async messaging (omit waitMin) — replies arrive automatically, never block
+- Do NOT create new channels unless explicitly asked
+- After broadcasting, do NOT follow up with individual termx_ask — broadcast IS the notification
 
 ```
 # List channels
 termx_channel(action="list")
 
-# Create a focused channel
-termx_channel(action="create", name="auth-refactor", mode="full")
-
-# Join an existing channel
-termx_channel(action="join", channelId="ch-3")
-
-# Broadcast to channel
+# Broadcast to #general
 termx_broadcast(channelId="ch-1", content="Everyone stop — spec changed")
 
-# Wait for replies
+# Wait for replies (ONLY when you must)
 termx_broadcast(channelId="ch-1", content="Who's available?", waitMin=2)
 
 # Temporary broadcast (no channel needed)
@@ -89,7 +88,7 @@ Auto-tracked. You are busy while working, idle between turns. `termx_list_panes`
 
 ## Best Practices
 
-1. Use async messaging by default — replies arrive automatically, no need to block
+1. ALWAYS use async messaging — omit waitMin, never block. Replies arrive automatically.
 2. Check for idle helpers before spawning — reuse is cheaper
 3. Label yourself after taking on work
 4. Include full context when delegating
