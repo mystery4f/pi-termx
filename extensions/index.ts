@@ -146,7 +146,7 @@ export default function termxExtension(pi: ExtensionAPI) {
       const msgs = pendingBroadcasts.splice(0);
       if (msgs.length === 0) return;
       pi.sendMessage(
-        { customType: "termx-channel-broadcast", content: msgs.join("\n---\n"), display: false },
+        { customType: "termx-channel-broadcast", content: msgs.join("\n---\n"), display: true },
         { triggerTurn: true },
       );
     }, 300);
@@ -160,7 +160,7 @@ export default function termxExtension(pi: ExtensionAPI) {
       const msgs = pendingAsks.splice(0);
       if (msgs.length === 0) return;
       pi.sendMessage(
-        { customType: "termx-channel-ask", content: msgs.join("\n---\n"), display: false },
+        { customType: "termx-channel-ask", content: msgs.join("\n---\n"), display: true },
         { triggerTurn: true },
       );
     }, 300);
