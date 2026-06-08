@@ -275,8 +275,8 @@ export default function termxExtension(pi: ExtensionAPI) {
         piArgs.push("--append-system-prompt", agent.file.replace(/\\/g, "/"));
       }
 
-      // 工作目录
-      const cwd = agent.cwd || process.env.TERMX_CWD || process.cwd();
+      // 工作目录（Windows 路径 \ 换 / 避免 bash 转义）
+      const cwd = (agent.cwd || process.env.TERMX_CWD || process.cwd()).replace(/\\/g, "/");
       const cmd = piArgs.join(" ");
       const fullCmd = cwd ? `cd "${cwd}" && ${cmd}` : cmd;
 
