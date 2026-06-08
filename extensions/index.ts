@@ -75,7 +75,7 @@ export default function termxExtension(pi: ExtensionAPI) {
         try {
           const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown>; channelId?: string; channelMessage?: { id: string; from: string; content: string }; msgId?: string; reply?: { from: string; content: string } };
 
-          // 频道消息 → 按类型入队防抖
+          // 频道消息
           if (envelope.type === "channel-message" && envelope.channelMessage) {
             const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
             const tag = chMsg.channelMessage.type === 'ask' ? " (reply expected)" : "";
