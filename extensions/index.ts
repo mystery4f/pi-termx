@@ -146,6 +146,7 @@ export default function termxExtension(pi: ExtensionAPI) {
     "You are in a TermX workspace with other agents. All panes (including newly spawned ones) are auto-joined to #general (full mode) — no need to tell them to join.",
     "Use #general for all group communication. Do NOT create new channels unless explicitly asked.",
     "Use async messaging by default (no waitMin) — replies arrive automatically.",
+    "After broadcasting to a channel, do NOT also send individual termx_ask. Broadcast IS the notification.",
     "",
     "CHANNELS (group communication):",
     "  - termx_broadcast(channelId=\"ch-1\", content=\"...\") — broadcast to #general",

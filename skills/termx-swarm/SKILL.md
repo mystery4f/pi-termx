@@ -97,4 +97,4 @@ Auto-tracked. You are busy while working, idle between turns. `termx_list_panes`
 6. One task per helper at a time
 7. If `termx_ask` returns "Target pane not found" — the pane has closed. Re-spawn or pick another idle pane
 8. Use `#general` for all group communication; create named channels only when explicitly asked
-9. Prefer `termx_broadcast` over multiple `termx_ask` when notifying several agents
+9. Prefer `termx_broadcast` over multiple `termx_ask` when notifying several agents — broadcast IS the notification, do not follow up with individual messages
