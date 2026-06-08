@@ -271,7 +271,8 @@ export default function termxExtension(pi: ExtensionAPI) {
       piArgs.push("--tools", allTools.join(","));
 
       if (agent.systemPrompt) {
-        piArgs.push("--append-system-prompt", agent.file);
+        // Windows 路径 \ 在 bash 中是转义符，统一换为 /
+        piArgs.push("--append-system-prompt", agent.file.replace(/\\/g, "/"));
       }
 
       // 工作目录
