@@ -62,6 +62,10 @@ export default function termxExtension(pi: ExtensionAPI) {
   let ws: WebSocket | null = null;
   let paneId = PANE_ID;
 
+  // 频道消息防抖合并队列
+  const pendingChannelMessages: string[] = [];
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
   // ── WS 收消息 ──
 
   pi.on("session_start", async () => {
@@ -75,38 +79,26 @@ export default function termxExtension(pi: ExtensionAPI) {
         try {
           const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown>; channelId?: string; channelMessage?: { id: string; from: string; content: string }; msgId?: string; reply?: { from: string; content: string } };
 
-          // 频道消息 → 作为用户消息注入
+          // 频道消息 → 入队防抖合并
           if (envelope.type === "channel-message" && envelope.channelMessage) {
             const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
             const isAsk = chMsg.channelMessage.type === 'ask';
-            pi.sendMessage(
-              {
-                customType: "termx-channel-message",
-                content: [
-                  isAsk
-                    ? `📢❓ #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)} [ASK — reply expected]:`
-                    : `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
-                  `"${chMsg.channelMessage.content}"`,
-                  `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
-                ].join("\n"),
-                display: false,
-              },
-              { triggerTurn: true },
-            );
+            pendingChannelMessages.push([
+              isAsk
+                ? `📢❓ #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)} [ASK — reply expected]:`
+                : `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
+              `"${chMsg.channelMessage.content}"`,
+              `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
+            ].join("\n"));
+            scheduleFlush();
             return;
           }
 
-          // 频道回复 → 作为用户消息注入
+          // 频道回复 → 入队防抖合并
           if (envelope.type === "channel-reply" && envelope.reply) {
             const chReply = envelope as typeof envelope & { channelId: string; msgId: string; reply: { from: string; content: string } };
-            pi.sendMessage(
-              {
-                customType: "termx-channel-reply",
-                content: `📢 #${chReply.channelId} reply to [${chReply.msgId}] from ${chReply.reply.from.slice(0, 8)}: "${chReply.reply.content}"`,
-                display: false,
-              },
-              { triggerTurn: true },
-            );
+            pendingChannelMessages.push(`📢 #${chReply.channelId} reply to [${chReply.msgId}] from ${chReply.reply.from.slice(0, 8)}: "${chReply.reply.content}"`);
+            scheduleFlush();
             return;
           }
 
@@ -134,7 +126,27 @@ export default function termxExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     if (ws) { ws.close(); ws = null; }
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    pendingChannelMessages.length = 0;
   });
+
+  /** 防抖合并：300ms 内收到的多条频道消息合并成一条 sendMessage */
+  function scheduleFlush(): void {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      const msgs = pendingChannelMessages.splice(0);
+      if (msgs.length === 0) return;
+      pi.sendMessage(
+        {
+          customType: "termx-channel-batch",
+          content: msgs.join("\n---\n"),
+          display: false,
+        },
+        { triggerTurn: true },
+      );
+    }, 300);
+  }
 
   // 自动标状态
   let idleTimer: ReturnType<typeof setTimeout> | null = null;

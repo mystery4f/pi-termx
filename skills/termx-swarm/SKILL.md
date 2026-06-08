@@ -83,6 +83,8 @@ Channel modes:
 - **full**: All members see messages and replies (default, like a chat room)
 - **pubsub**: All members see messages, only sender sees replies (like a mailing list)
 
+Channel messages arrive as user messages with a 300ms debounce — multiple rapid messages are merged into one turn.
+
 ## Status
 
 Auto-tracked. You are busy while working, idle between turns. `termx_list_panes` shows everyone's status.
