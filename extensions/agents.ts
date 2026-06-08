@@ -14,6 +14,7 @@ export interface AgentConfig {
   systemPrompt: string;
   cwd?: string;
   source: "user" | "project";
+  file: string;
 }
 
 function parseFrontmatter(raw: string): { data: Record<string, string>; body: string } {
@@ -52,6 +53,7 @@ function discoverDir(dir: string, source: "user" | "project"): AgentConfig[] {
         systemPrompt: body,
         cwd: data.cwd,
         source,
+        file: join(dir, file),
       });
     } catch { /* skip invalid files */ }
   }

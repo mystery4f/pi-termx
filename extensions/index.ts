@@ -271,7 +271,7 @@ export default function termxExtension(pi: ExtensionAPI) {
       piArgs.push("--tools", allTools.join(","));
 
       if (agent.systemPrompt) {
-        piArgs.push("--append-system-prompt", agent.systemPrompt);
+        piArgs.push("--append-system-prompt", agent.file);
       }
 
       // 工作目录
