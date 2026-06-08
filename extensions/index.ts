@@ -143,7 +143,7 @@ export default function termxExtension(pi: ExtensionAPI) {
   const TERMX_USAGE_BLOCK = [
     "",
     "## TermX Workspace",
-    "You are in a TermX workspace with other agents. You are auto-joined to #general (full mode).",
+    "You are in a TermX workspace with other agents. All panes (including newly spawned ones) are auto-joined to #general (full mode) — no need to tell them to join.",
     "",
     "CHANNELS (group communication):",
     "  - termx_broadcast(channelId=\"ch-1\", content=\"...\") — broadcast to #general",

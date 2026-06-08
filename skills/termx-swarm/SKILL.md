@@ -57,7 +57,7 @@ termx_ask(targetPaneId, "Fixed. Returns 401 now.", replyTo="msg-3")
 
 ## Channels
 
-Agents are auto-joined to `#general` (full mode). Use channels for group discussions.
+All panes are auto-joined to `#general` (full mode) — no need to tell spawned agents to join.
 
 ```
 # List channels
