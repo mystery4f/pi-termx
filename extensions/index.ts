@@ -146,7 +146,7 @@ export default function termxExtension(pi: ExtensionAPI) {
     "You are in a TermX workspace with other agents, auto-joined to #general (full mode).",
     "",
     "CRITICAL RULES:",
-    "  1. ALWAYS use async messaging — omit waitMin. Replies arrive automatically. NEVER block.",
+    "  1. Prefer async messaging — omit waitMin. Replies arrive automatically. Only block when you MUST wait for a response.",
     "  2. Do NOT create channels unless explicitly asked. Use #general.",
     "  3. After broadcasting, do NOT follow up with individual termx_ask. Broadcast IS the notification.",
     "",
