@@ -13,6 +13,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { discoverAgents, getAgent } from "./agents";
+import { buildSpawnCommand, cleanupTempDir } from "./spawn";
+
+// 当前 extension 入口路径，用于注入到新 pi 实例
+const PI_TERMX_EXTENSION = __filename;
+// pi-termx package 根目录
+const PI_TERMX_ROOT = join(__dirname, "..");
 
 const PORT = process.env.TERMX_PORT;
 const TOKEN = process.env.TERMX_TOKEN;
@@ -45,12 +51,12 @@ function api(endpoint: string, body: Record<string, unknown>): Promise<{ ok: boo
 export default function termxExtension(pi: ExtensionAPI) {
   if (!IS_TERMX) return; // 不在 TermX 中,静默跳过
 
-  // 自动收集注册的工具名
-  const registeredTools: string[] = [];
-  const origRegisterTool = pi.registerTool.bind(pi);
+  // 收集本扩展注册的工具名，用于 spawn 时注入 --tools 白名单
+  const registeredToolNames: string[] = [];
+  const origRegister = pi.registerTool.bind(pi);
   pi.registerTool = (def) => {
-    registeredTools.push(def.name);
-    return origRegisterTool(def);
+    registeredToolNames.push(def.name);
+    return origRegister(def);
   };
 
   let ws: WebSocket | null = null;
@@ -269,7 +275,12 @@ export default function termxExtension(pi: ExtensionAPI) {
         name: a.name,
         description: a.description,
         model: a.model || "(default)",
-        thinkingLevel: a.thinkingLevel || "(default)",
+        thinking: a.thinking || "(default)",
+        tools: a.tools || [],
+        skills: a.skills || [],
+        extensions: a.extensions || [],
+        inheritSkills: a.inheritSkills,
+        systemPromptMode: a.systemPromptMode,
         cwd: a.cwd || "(default)",
         source: a.source,
       }));
@@ -301,53 +312,51 @@ export default function termxExtension(pi: ExtensionAPI) {
         } catch { /* use settings default */ }
       }
 
-      // 构建 pi 命令
-      const piArgs: string[] = ["pi"];
-      if (model) piArgs.push("--model", model);
-      if (agent.thinkingLevel) piArgs.push("--thinking", agent.thinkingLevel);
+      // 构建 spawn 命令 (借鉴 pi-subagents 的 buildPiArgs)
+      const piTermxRoot = join(__dirname, "..");
+      const { spawn: spawnSpec, tempDir } = buildSpawnCommand({
+        model,
+        thinking: agent.thinking,
+        tools: agent.tools,
+        extensions: agent.extensions,
+        skills: agent.skills,
+        inheritSkills: agent.inheritSkills,
+        systemPromptMode: agent.systemPromptMode,
+        systemPrompt: agent.systemPrompt || undefined,
+        systemPromptFile: agent.systemPrompt ? agent.file : undefined,
+        task: params.task || "Awaiting instructions.",
+        cwd: agent.cwd || process.env.TERMX_CWD || process.cwd(),
+        // TermX 基础设施：始终注入
+        termxExtension: PI_TERMX_EXTENSION,
+        termxSkills: [join(piTermxRoot, "skills", "termx-swarm")],
+        termxTools: registeredToolNames,
+      });
 
-      // tools：始终包含当前扩展已注册的所有工具 + md 配置的工具（去重）
-      const allTools = [...new Set([...registeredTools, ...(agent.tools ?? [])])];
-      piArgs.push("--tools", allTools.join(","));
-
-      if (agent.systemPrompt) {
-        // Windows 路径 \ 在 bash 中是转义符，统一换为 /
-        piArgs.push("--append-system-prompt", agent.file.replace(/\\/g, "/"));
-      }
-
-      // 工作目录（Windows 路径 \ 换 / 避免 bash 转义）
+      // 构建 shell 命令字符串
       const cwd = (agent.cwd || process.env.TERMX_CWD || process.cwd()).replace(/\\/g, "/");
-      const cmd = piArgs.join(" ");
-      const fullCmd = cwd ? `cd "${cwd}" && ${cmd}` : cmd;
+      const cmdStr = [spawnSpec.command, ...spawnSpec.args]
+        .map((s) => /[ \"']/.test(s) ? `"${s}"` : s)
+        .join(" ");
+      const fullCmd = cwd ? `cd "${cwd}" && ${cmdStr}` : cmdStr;
 
-      // 创建 pane（方向自动）
+      console.log("[pi-termx] spawn command:", fullCmd);
+
+      // 创建 pane
       const spawnResult = await api("/api/pane/spawn", {
         token: TOKEN, paneId,
         command: fullCmd,
       });
+
+      cleanupTempDir(tempDir);
+
       if (!spawnResult.ok) return { content: [{ type: "text", text: `Error spawning: ${spawnResult.error}` }] };
       const targetPaneId = (spawnResult.data as any)?.paneId;
       if (!targetPaneId) return { content: [{ type: "text", text: "Spawned but no paneId returned" }] };
 
-      // 2. 等 shell 启动
-      await new Promise((r) => setTimeout(r, 2500));
-
-      // 3. 发任务
-      if (params.task) {
-        const askResult = await api("/api/msg/send", {
-          token: TOKEN, paneId,
-          targetPaneId,
-          content: params.task,
-        });
-        if (!askResult.ok) {
-          return { content: [{ type: "text", text: `Spawned ${params.name} at ${targetPaneId}, but failed to send task: ${askResult.error}` }] };
-        }
-      }
-
       return {
         content: [{
           type: "text",
-          text: `Spawned ${params.name}${agent.model ? ` (${agent.model})` : ""} at pane ${targetPaneId}${params.task ? ` with task` : ""}. Use this full ID for termx_ask.`,
+          text: `Spawned ${params.name}${agent.model ? ` (${agent.model})` : ""} at pane ${targetPaneId}. Use this full ID for termx_ask.`,
         }],
         details: { paneId: targetPaneId, agent: params.name },
       };
