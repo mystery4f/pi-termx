@@ -89,12 +89,12 @@ Auto-tracked. You are busy while working, idle between turns. `termx_list_panes`
 
 ## Best Practices
 
-1. Check for idle helpers before spawning — reuse is cheaper
-2. Label yourself after taking on work
-3. Include full context when delegating
-4. Reply promptly — others may be blocked
-5. Async by default, only sync when you need the answer immediately
+1. Use async messaging by default — replies arrive automatically, no need to block
+2. Check for idle helpers before spawning — reuse is cheaper
+3. Label yourself after taking on work
+4. Include full context when delegating
+5. Reply promptly — others may be blocked
 6. One task per helper at a time
-7. If `termx_ask` returns "Target pane not found" — the pane has closed. Re-spawn a new helper or pick another available pane from `termx_list_panes`
-8. Use `#general` for workspace-wide announcements; create named channels for focused group work
-9. Prefer `termx_broadcast` over multiple `termx_ask` when notifying several agents about the same thing
+7. If `termx_ask` returns "Target pane not found" — the pane has closed. Re-spawn or pick another idle pane
+8. Use `#general` for all group communication; create named channels only when explicitly asked
+9. Prefer `termx_broadcast` over multiple `termx_ask` when notifying several agents
