@@ -82,11 +82,9 @@ export default function termxExtension(pi: ExtensionAPI) {
           // 频道消息 → 入队防抖合并
           if (envelope.type === "channel-message" && envelope.channelMessage) {
             const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
-            const isAsk = chMsg.channelMessage.type === 'ask';
+            const tag = chMsg.channelMessage.type === 'ask' ? " (reply expected)" : "";
             pendingChannelMessages.push([
-              isAsk
-                ? `📢❓ #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)} [ASK — reply expected]:`
-                : `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
+              `📢 #${chMsg.channelId} ${chMsg.channelMessage.from.slice(0, 8)} [${chMsg.channelMessage.id}]${tag}`,
               `"${chMsg.channelMessage.content}"`,
               `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
             ].join("\n"));
@@ -97,7 +95,7 @@ export default function termxExtension(pi: ExtensionAPI) {
           // 频道回复 → 入队防抖合并
           if (envelope.type === "channel-reply" && envelope.reply) {
             const chReply = envelope as typeof envelope & { channelId: string; msgId: string; reply: { from: string; content: string } };
-            pendingChannelMessages.push(`📢 #${chReply.channelId} reply to [${chReply.msgId}] from ${chReply.reply.from.slice(0, 8)}: "${chReply.reply.content}"`);
+            pendingChannelMessages.push(`📢 #${chReply.channelId} ${chReply.reply.from.slice(0, 8)} [${chReply.msgId}] reply: "${chReply.reply.content}"`);
             scheduleFlush();
             return;
           }
