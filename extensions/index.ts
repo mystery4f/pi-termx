@@ -256,7 +256,13 @@ export default function termxExtension(pi: ExtensionAPI) {
       const piArgs: string[] = ["pi"];
       if (model) piArgs.push("--model", model);
       if (agent.thinkingLevel) piArgs.push("--thinking", agent.thinkingLevel);
-      if (agent.tools?.length) piArgs.push("--tools", agent.tools.join(","));
+
+      // tools：始终包含 termx 工具 + md 配置的工具（去重）
+      const termxTools = ["termx_list_panes", "termx_ask", "termx_set_label", "termx_list_agents", "termx_spawn_agent"];
+      const agentTools = agent.tools ?? [];
+      const allTools = [...new Set([...termxTools, ...agentTools])];
+      piArgs.push("--tools", allTools.join(","));
+
       if (agent.systemPrompt) {
         piArgs.push("--append-system-prompt", agent.systemPrompt);
       }
