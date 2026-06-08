@@ -17,6 +17,8 @@ You are part of a swarm of agents sharing a TermX workspace.
 | `termx_spawn_agent` | Spawn a pre-configured agent with task |
 | `termx_ask` | Send message / ask question / reply |
 | `termx_set_label` | Tag yourself with what you're working on |
+| `termx_channel` | Create/join/leave/list group chat channels |
+| `termx_broadcast` | Send message to a channel or specific panes |
 
 `termx_ask` modes:
 - **Async** (default): returns immediately
@@ -53,6 +55,34 @@ Messages arrive automatically. Assess, work, reply:
 termx_ask(targetPaneId, "Fixed. Returns 401 now.", replyTo="msg-3")
 ```
 
+## Channels
+
+Agents are auto-joined to `#general` (full mode). Use channels for group discussions.
+
+```
+# List channels
+termx_channel(action="list")
+
+# Create a focused channel
+termx_channel(action="create", name="auth-refactor", mode="full")
+
+# Join an existing channel
+termx_channel(action="join", channelId="ch-3")
+
+# Broadcast to channel
+termx_broadcast(channelId="ch-1", content="Everyone stop — spec changed")
+
+# Wait for replies
+termx_broadcast(channelId="ch-1", content="Who's available?", waitMin=2)
+
+# Temporary broadcast (no channel needed)
+termx_broadcast(targetPaneIds=["abc12345", "def67890"], content="FYI: deploying now")
+```
+
+Channel modes:
+- **full**: All members see messages and replies (default, like a chat room)
+- **pubsub**: All members see messages, only sender sees replies (like a mailing list)
+
 ## Status
 
 Auto-tracked. You are busy while working, idle between turns. `termx_list_panes` shows everyone's status.
@@ -66,3 +96,5 @@ Auto-tracked. You are busy while working, idle between turns. `termx_list_panes`
 5. Async by default, only sync when you need the answer immediately
 6. One task per helper at a time
 7. If `termx_ask` returns "Target pane not found" — the pane has closed. Re-spawn a new helper or pick another available pane from `termx_list_panes`
+8. Use `#general` for workspace-wide announcements; create named channels for focused group work
+9. Prefer `termx_broadcast` over multiple `termx_ask` when notifying several agents about the same thing
