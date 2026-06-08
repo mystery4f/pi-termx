@@ -9,7 +9,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import WebSocket from "ws";
 import http from "node:http";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { discoverAgents, getAgent } from "./agents";
@@ -61,11 +61,7 @@ export default function termxExtension(pi: ExtensionAPI) {
   pi.on("session_start", async () => {
     try {
       ws = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
-      ws.on("error", (e) => {
-        writeFileSync("D:/termx-ws-error.txt", `WS error: ${e.message}\n`);
-      });
       ws.on("open", () => {
-        writeFileSync("D:/termx-ws-open.txt", `WS connected, listening for pane=${paneId}\n`);
         ws!.send(JSON.stringify({ type: "listen", paneId, token: TOKEN }));
 
         // 注入:告诉模型可以并行派活
@@ -86,7 +82,6 @@ export default function termxExtension(pi: ExtensionAPI) {
       ws.on("message", (raw) => {
         try {
           const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown> };
-          writeFileSync("D:/termx-ws-msg.txt", `Received: type=${envelope.type}, to=${envelope.message?.to}, myPaneId=${paneId}\n`);
           if (envelope.type !== "message" || !envelope.message || envelope.message.to !== paneId) return;
           const msg = envelope.message as { id: string; from: string; content: string; replyTo?: string };
 
@@ -105,7 +100,7 @@ export default function termxExtension(pi: ExtensionAPI) {
           );
         } catch { /* ignore */ }
       });
-    } catch (e: any) { writeFileSync("D:/termx-ws-error.txt", `WS setup failed: ${e?.message || e}\n`); }
+    } catch { /* WS failed */ }
   });
 
   pi.on("session_shutdown", async () => {
