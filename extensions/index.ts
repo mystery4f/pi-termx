@@ -62,9 +62,11 @@ export default function termxExtension(pi: ExtensionAPI) {
   let ws: WebSocket | null = null;
   let paneId = PANE_ID;
 
-  // 频道消息防抖合并队列
-  const pendingChannelMessages: string[] = [];
-  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  // 频道消息防抖合并队列（分类型）
+  const pendingBroadcasts: string[] = [];
+  const pendingAsks: string[] = [];
+  let broadcastTimer: ReturnType<typeof setTimeout> | null = null;
+  let askTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── WS 收消息 ──
 
@@ -79,24 +81,30 @@ export default function termxExtension(pi: ExtensionAPI) {
         try {
           const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown>; channelId?: string; channelMessage?: { id: string; from: string; content: string }; msgId?: string; reply?: { from: string; content: string } };
 
-          // 频道消息 → 入队防抖合并
+          // 频道消息 → 按类型入队防抖
           if (envelope.type === "channel-message" && envelope.channelMessage) {
             const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
             const tag = chMsg.channelMessage.type === 'ask' ? " (reply expected)" : "";
-            pendingChannelMessages.push([
+            const text = [
               `📢 #${chMsg.channelId} ${chMsg.channelMessage.from.slice(0, 8)} [${chMsg.channelMessage.id}]${tag}`,
               `"${chMsg.channelMessage.content}"`,
               `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
-            ].join("\n"));
-            scheduleFlush();
+            ].join("\n");
+            if (chMsg.channelMessage.type === 'ask') {
+              pendingAsks.push(text);
+              scheduleFlushAsk();
+            } else {
+              pendingBroadcasts.push(text);
+              scheduleFlushBroadcast();
+            }
             return;
           }
 
-          // 频道回复 → 入队防抖合并
+          // 频道回复 → 入广播队列
           if (envelope.type === "channel-reply" && envelope.reply) {
             const chReply = envelope as typeof envelope & { channelId: string; msgId: string; reply: { from: string; content: string } };
-            pendingChannelMessages.push(`📢 #${chReply.channelId} ${chReply.reply.from.slice(0, 8)} [${chReply.msgId}] reply: "${chReply.reply.content}"`);
-            scheduleFlush();
+            pendingBroadcasts.push(`📢 #${chReply.channelId} ${chReply.reply.from.slice(0, 8)} [${chReply.msgId}] reply: "${chReply.reply.content}"`);
+            scheduleFlushBroadcast();
             return;
           }
 
@@ -124,23 +132,35 @@ export default function termxExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     if (ws) { ws.close(); ws = null; }
-    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    pendingChannelMessages.length = 0;
+    if (broadcastTimer) { clearTimeout(broadcastTimer); broadcastTimer = null; }
+    if (askTimer) { clearTimeout(askTimer); askTimer = null; }
+    pendingBroadcasts.length = 0;
+    pendingAsks.length = 0;
   });
 
-  /** 防抖合并：300ms 内收到的多条频道消息合并成一条 sendMessage */
-  function scheduleFlush(): void {
-    if (flushTimer) clearTimeout(flushTimer);
-    flushTimer = setTimeout(() => {
-      flushTimer = null;
-      const msgs = pendingChannelMessages.splice(0);
+  /** 防抖合并广播/回复 (customType: termx-channel-broadcast) */
+  function scheduleFlushBroadcast(): void {
+    if (broadcastTimer) clearTimeout(broadcastTimer);
+    broadcastTimer = setTimeout(() => {
+      broadcastTimer = null;
+      const msgs = pendingBroadcasts.splice(0);
       if (msgs.length === 0) return;
       pi.sendMessage(
-        {
-          customType: "termx-channel-batch",
-          content: msgs.join("\n---\n"),
-          display: false,
-        },
+        { customType: "termx-channel-broadcast", content: msgs.join("\n---\n"), display: false },
+        { triggerTurn: true },
+      );
+    }, 300);
+  }
+
+  /** 防抖合并 ask (customType: termx-channel-ask) */
+  function scheduleFlushAsk(): void {
+    if (askTimer) clearTimeout(askTimer);
+    askTimer = setTimeout(() => {
+      askTimer = null;
+      const msgs = pendingAsks.splice(0);
+      if (msgs.length === 0) return;
+      pi.sendMessage(
+        { customType: "termx-channel-ask", content: msgs.join("\n---\n"), display: false },
         { triggerTurn: true },
       );
     }, 300);
