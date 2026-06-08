@@ -79,16 +79,16 @@ export default function termxExtension(pi: ExtensionAPI) {
           if (envelope.type === "channel-message" && envelope.channelMessage) {
             const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
             const tag = chMsg.channelMessage.type === 'ask' ? " (reply expected)" : "";
-            const customType = chMsg.channelMessage.type === 'ask' ? "termx-channel-ask" : "termx-channel-broadcast";
             pi.sendMessage(
               {
-                customType,
+                customType: "termx-message",
                 content: [
                   `📢 #${chMsg.channelId} ${chMsg.channelMessage.from.slice(0, 8)} [${chMsg.channelMessage.id}]${tag}`,
                   `"${chMsg.channelMessage.content}"`,
                   `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
                 ].join("\n"),
                 display: true,
+                details: chMsg,
               },
               { triggerTurn: true },
             );
@@ -100,9 +100,10 @@ export default function termxExtension(pi: ExtensionAPI) {
             const chReply = envelope as typeof envelope & { channelId: string; msgId: string; reply: { from: string; content: string } };
             pi.sendMessage(
               {
-                customType: "termx-channel-broadcast",
+                customType: "termx-message",
                 content: `📢 #${chReply.channelId} ${chReply.reply.from.slice(0, 8)} [${chReply.msgId}] reply: "${chReply.reply.content}"`,
                 display: true,
+                details: chReply,
               },
               { triggerTurn: true },
             );
