@@ -1,44 +1,21 @@
 ---
 name: termx-swarm
-description: Parallel task delegation via TermX panes. Use when working on large tasks that can be split into independent sub-tasks, or when you need help from a specialized model. Covers spawning helpers, delegating work, tracking status, and expert discovery.
+description: Parallel task delegation via TermX panes. Use when working on large tasks split into independent sub-tasks.
 compatibility: Requires TermX terminal. Tools unavailable outside TermX.
 ---
 
 # TermX Swarm — Parallel Agent Collaboration
 
-You are part of a swarm of agents sharing a TermX workspace. **You are auto-joined to #general (full mode) — you can immediately broadcast to all agents without any setup.**
+You are part of a swarm of agents sharing a TermX workspace.
 
-## Tools
+## Delegation Workflow
 
-| Tool | Purpose |
-|------|---------|
-| `termx_list_panes` | See all agents: paneId, self, status, label |
-| `termx_list_agents` | See configured agents from .pi/agents/*.md |
-| `termx_spawn_agent` | Spawn a pre-configured agent with task |
-| `termx_ask` | Send message / ask question / reply |
-| `termx_set_label` | Tag yourself with what you're working on |
-| `termx_channel` | Create/join/leave/list group chat channels |
-| `termx_broadcast` | Send message to a channel or specific panes |
+1. `termx_list_panes` → check for idle helpers
+2. Idle helper exists → `termx_ask(helperPaneId, taskWithContext)`
+3. No idle helper → `termx_spawn_agent(name, task)` or `termx pane spawn pi`
+4. `termx_set_label("auth refactor")` → tag yourself
 
-`termx_ask` modes:
-- **Async** (default): returns immediately
-- **Sync**: `wait=true` — blocks until reply
-- **Reply**: `replyTo="msg-3"` — reply to a message
-
-## Delegation
-
-```
-1. termx_list_panes → check for idle helpers
-2. Idle helper exists → termx_ask(helperPaneId, taskWithContext)
-3. No idle helper → termx pupi (auto layout)
-                → termx_list_panes → get new paneId
-                → termx_ask(newPaneId, taskWithContext)
-4. termx_set_label("auth refactor") → tag yourself
-```
-
-Or use `termx_spawn_agent(name, task)` for pre-configured agents.
-
-## Context
+## Delegation Context
 
 Always include: what to do, relevant files, constraints, success criteria.
 
@@ -55,45 +32,10 @@ Messages arrive automatically. Assess, work, reply:
 termx_ask(targetPaneId, "Fixed. Returns 401 now.", replyTo="msg-3")
 ```
 
-## Channels
+## Channel Communication
 
-All panes are auto-joined to `#general` (full mode). Use it for all group communication.
-
-**CRITICAL:**
-- ALWAYS use async messaging (omit waitMin) — replies arrive automatically, never block
-- Do NOT create new channels unless explicitly asked
-- After broadcasting, do NOT follow up with individual termx_ask — broadcast IS the notification
-
-```
-# List channels
-termx_channel(action="list")
-
-# Broadcast to #general
-termx_broadcast(channelId="ch-1", content="Everyone stop — spec changed")
-
-# Wait for replies (ONLY when you must)
-termx_broadcast(channelId="ch-1", content="Who's available?", waitMin=2)
-
-# Temporary broadcast (no channel needed)
-termx_broadcast(targetPaneIds=["abc12345", "def67890"], content="FYI: deploying now")
-```
-
-Channel modes:
-- **full**: All members see messages and replies (default, like a chat room)
-- **pubsub**: All members see messages, only sender sees replies (like a mailing list)
+Use `#general` for group announcements. `termx_broadcast(channelId="ch-1", content="...")` notifies all agents at once. Do not follow up with individual `termx_ask`.
 
 ## Status
 
-Auto-tracked. You are busy while working, idle between turns. `termx_list_panes` shows everyone's status.
-
-## Best Practices
-
-1. ALWAYS use async messaging — omit waitMin, never block. Replies arrive automatically.
-2. Check for idle helpers before spawning — reuse is cheaper
-3. Label yourself after taking on work
-4. Include full context when delegating
-5. Reply promptly — others may be blocked
-6. One task per helper at a time
-7. If `termx_ask` returns "Target pane not found" — the pane has closed. Re-spawn or pick another idle pane
-8. Use `#general` for all group communication; create named channels only when explicitly asked
-9. Prefer `termx_broadcast` over multiple `termx_ask` when notifying several agents — broadcast IS the notification, do not follow up with individual messages
+Auto-tracked. You are busy while working, idle between turns.
