@@ -436,13 +436,13 @@ export default function termxExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "termx_broadcast",
     label: "Broadcast to Channel or Panes",
-    description: "Send a message to a channel or to specific panes (temporary broadcast). Set waitMin > 0 to block until enough replies arrive. Channel mode determines who sees replies (full=all members, pubsub=only sender).",
+    description: "Send a message to a channel or specific panes (temporary broadcast). Async by default — omit waitMin. Only set waitMin if you MUST block until replies arrive.",
     parameters: Type.Object({
       channelId: Type.Optional(Type.String({ description: "Channel ID to broadcast to (mutually exclusive with targetPaneIds)" })),
       targetPaneIds: Type.Optional(Type.Array(Type.String(), { description: "Pane IDs for temporary broadcast (mutually exclusive with channelId)" })),
       content: Type.String({ description: "Message content" }),
-      waitMin: Type.Optional(Type.Number({ description: "Minimum replies to wait for (0 = async, default). Only works with channelId." })),
-      timeout: Type.Optional(Type.Number({ description: "Max wait time in ms (default: 120000)" })),
+      waitMin: Type.Optional(Type.Number({ description: "AVOID unless necessary. Minimum replies to block for (omit = async)." })),
+      timeout: Type.Optional(Type.Number({ description: "Max wait time in ms (default: 30000)" })),
     }),
     async execute(_id, params, signal) {
       // 临时广播：targetPaneIds 模式
@@ -480,7 +480,7 @@ export default function termxExtension(pi: ExtensionAPI) {
       }
 
       // 同步等待回复
-      const timeoutMs = params.timeout || 120_000;
+      const timeoutMs = params.timeout || 30_000;
       return new Promise((resolve) => {
         const wsBroadcast = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
         const timer = setTimeout(() => {
