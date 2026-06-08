@@ -276,8 +276,7 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // 工作目录
       const cwd = agent.cwd || process.env.TERMX_CWD || process.cwd();
-      // 拼接命令时所有参数加双引号
-      const cmd = piArgs.map((a) => `"${a.replace(/"/g, '\\"')}"`).join(" ");
+      const cmd = piArgs.join(" ");
       const fullCmd = cwd ? `cd "${cwd}" && ${cmd}` : cmd;
 
       // 创建 pane（方向自动）
