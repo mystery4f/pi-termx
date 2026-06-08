@@ -98,12 +98,15 @@ export default function termxExtension(pi: ExtensionAPI) {
 
           // 频道消息
           if (envelope.type === "channel-message" && envelope.channelMessage) {
-            const chMsg = envelope;
+            const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
+            const isAsk = chMsg.channelMessage.type === 'ask';
             pi.sendMessage(
               {
                 customType: "termx-channel-message",
                 content: [
-                  `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
+                  isAsk
+                    ? `📢❓ #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)} [ASK — reply expected]:`
+                    : `📢 #${chMsg.channelId} [${chMsg.channelMessage.id}] from ${chMsg.channelMessage.from.slice(0, 8)}:`,
                   `"${chMsg.channelMessage.content}"`,
                   `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
                 ].join("\n"),
@@ -464,6 +467,7 @@ export default function termxExtension(pi: ExtensionAPI) {
         token: TOKEN, paneId,
         channelId: params.channelId,
         content: params.content,
+        type: params.waitMin && params.waitMin > 0 ? "ask" : "broadcast",
       });
       if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
 
