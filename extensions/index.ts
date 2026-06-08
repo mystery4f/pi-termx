@@ -44,6 +44,15 @@ function api(endpoint: string, body: Record<string, unknown>): Promise<{ ok: boo
 
 export default function termxExtension(pi: ExtensionAPI) {
   if (!IS_TERMX) return; // 不在 TermX 中,静默跳过
+
+  // 自动收集注册的工具名
+  const registeredTools: string[] = [];
+  const origRegisterTool = pi.registerTool.bind(pi);
+  pi.registerTool = (def) => {
+    registeredTools.push(def.name);
+    return origRegisterTool(def);
+  };
+
   let ws: WebSocket | null = null;
   let paneId = PANE_ID;
 
@@ -257,10 +266,8 @@ export default function termxExtension(pi: ExtensionAPI) {
       if (model) piArgs.push("--model", model);
       if (agent.thinkingLevel) piArgs.push("--thinking", agent.thinkingLevel);
 
-      // tools：始终包含 termx 工具 + md 配置的工具（去重）
-      const termxTools = ["termx_list_panes", "termx_ask", "termx_set_label", "termx_list_agents", "termx_spawn_agent"];
-      const agentTools = agent.tools ?? [];
-      const allTools = [...new Set([...termxTools, ...agentTools])];
+      // tools：始终包含当前扩展已注册的所有工具 + md 配置的工具（去重）
+      const allTools = [...new Set([...registeredTools, ...(agent.tools ?? [])])];
       piArgs.push("--tools", allTools.join(","));
 
       if (agent.systemPrompt) {
