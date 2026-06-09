@@ -61,10 +61,20 @@ export default function termxExtension(pi: ExtensionAPI) {
 
   let ws: WebSocket | null = null;
   let paneId = PANE_ID;
+  let cachedTabChannelId: string | null = null;
 
   // ── WS 收消息 ──
 
   pi.on("session_start", async () => {
+    // 缓存 tab 频道 ID
+    try {
+      const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
+      if (listResult.ok) {
+        const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
+        const tabCh = (listResult.data as any).channels.find((c: any) => c.name === tabChName);
+        if (tabCh) cachedTabChannelId = tabCh.id;
+      }
+    } catch { /* ignore */ }
     try {
       ws = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
       ws.on("open", () => {
@@ -143,17 +153,22 @@ export default function termxExtension(pi: ExtensionAPI) {
   const TERMX_USAGE_BLOCK = [
     "",
     "## TermX Workspace",
-    "You are in a TermX workspace with other agents, auto-joined to #general (full mode).",
+    "You are in a TermX workspace with other agents. You have two auto-joined channels:",
+    "  - tab channel (same-tab agents) — PRIMARY channel for coordination.",
+    "  - global — ALL agents across ALL tabs. Only use when you need cross-tab coordination.",
     "",
     "CRITICAL RULES:",
-    "  1. Prefer async messaging — omit waitMin. Replies arrive automatically. Only block when you MUST wait for a response.",
-    "  2. Do NOT create channels unless explicitly asked. Use #general.",
-    "  3. After broadcasting, do NOT follow up with individual termx_ask. Broadcast IS the notification.",
+    "  1. Always prefer your tab channel for broadcasting. termx_broadcast() defaults to it.",
+    "  2. Use global ONLY when you need to reach agents in other tabs.",
+    "  3. Prefer async messaging — omit waitMin. Replies arrive automatically.",
+    "  4. After broadcasting, do NOT follow up with individual termx_ask. Broadcast IS the notification.",
+    "  5. Do NOT create channels unless explicitly asked.",
     "",
     "TOOLS:",
-    "  termx_broadcast(channelId=\"ch-1\", content=\"...\") — async broadcast to #general",
-    "  termx_broadcast(targetPaneIds=[...], content=\"...\") — temporary broadcast",
-    "  termx_channel(action='list') — see channels",
+    '  termx_broadcast(content="...") — broadcast to your tab channel (default)',
+    '  termx_broadcast(channelId="global", content="...") — broadcast to all agents',
+    '  termx_broadcast(targetPaneIds=[...], content="...") — temporary broadcast to specific panes',
+    "  termx_channel(action='list') — see all channels",
     "  termx_list_panes — see all agents (status/idle/busy/label)",
     "  termx_ask(targetPaneId, content) — 1v1 send/ask/reply",
     "  termx_spawn_agent(name, task) — spawn agent in new pane",
@@ -374,7 +389,7 @@ export default function termxExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "termx_channel",
     label: "Channel Management",
-    description: "Manage group chat channels. Actions: create, join, leave, list, info. Channels let multiple agents communicate in a shared space. The #general channel is auto-created and all panes auto-join it.",
+    description: "Manage group chat channels. Actions: create, join, leave, list, info. You are auto-joined to 'global' (all agents) and your tab channel (same-tab agents).",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("create", { description: "Create a new channel" }),
@@ -435,9 +450,9 @@ export default function termxExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "termx_broadcast",
     label: "Broadcast to Channel or Panes",
-    description: "Send a message to a channel or specific panes (temporary broadcast). Async by default — omit waitMin. Only set waitMin if you MUST block until replies arrive.",
+    description: "Send a message to your tab channel (default), a specific channel, or specific panes (temporary broadcast). Async by default — omit waitMin. Only set waitMin if you MUST block until replies arrive.",
     parameters: Type.Object({
-      channelId: Type.Optional(Type.String({ description: "Channel ID to broadcast to (mutually exclusive with targetPaneIds)" })),
+      channelId: Type.Optional(Type.String({ description: "Target channel. Default: your tab channel (same-tab agents). Set to 'global' for all agents across all tabs." })),
       targetPaneIds: Type.Optional(Type.Array(Type.String(), { description: "Pane IDs for temporary broadcast (mutually exclusive with channelId)" })),
       content: Type.String({ description: "Message content" }),
       waitMin: Type.Optional(Type.Number({ description: "AVOID unless necessary. Minimum replies to block for (omit = async)." })),
@@ -458,14 +473,36 @@ export default function termxExtension(pi: ExtensionAPI) {
         return { content: [{ type: "text", text: `Broadcast sent to ${sent}/${params.targetPaneIds.length} panes` }] };
       }
 
-      // 频道广播
-      if (!params.channelId) {
-        return { content: [{ type: "text", text: "Error: provide either channelId or targetPaneIds" }] };
+      // 频道广播：支持按名称查找（如 "global"），默认用 tab 频道
+      let channelId = params.channelId;
+      if (channelId && !channelId.startsWith('ch-')) {
+        // 按名称查找频道
+        const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
+        if (listResult.ok) {
+          const found = (listResult.data as any).channels.find((c: any) => c.name === channelId);
+          if (found) channelId = found.id;
+        }
+      }
+      if (!channelId) {
+        if (cachedTabChannelId) {
+          channelId = cachedTabChannelId;
+        } else {
+          // fallback: 查找 tab 频道
+          const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
+          if (listResult.ok) {
+            const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
+            const tabCh = (listResult.data as any).channels.find((c: any) => c.name === tabChName);
+            if (tabCh) { channelId = tabCh.id; cachedTabChannelId = tabCh.id; }
+          }
+        }
+        if (!channelId) {
+          return { content: [{ type: "text", text: "Error: no tab channel found, provide channelId explicitly" }] };
+        }
       }
 
       const result = await api("/api/channel/broadcast", {
         token: TOKEN, paneId,
-        channelId: params.channelId,
+        channelId,
         content: params.content,
         type: params.waitMin && params.waitMin > 0 ? "ask" : "broadcast",
       });
@@ -475,7 +512,7 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // 异步模式
       if (!params.waitMin || params.waitMin <= 0) {
-        return { content: [{ type: "text", text: `Broadcast sent to channel ${params.channelId} (msg: ${msgId})` }] };
+        return { content: [{ type: "text", text: `Broadcast sent to channel ${channelId} (msg: ${msgId})` }] };
       }
 
       // 同步等待回复
@@ -494,7 +531,7 @@ export default function termxExtension(pi: ExtensionAPI) {
         wsBroadcast.on("message", (raw) => {
           try {
             const m = JSON.parse(raw.toString()) as { type: string; channelId?: string; msgId?: string; reply?: { from: string; content: string } };
-            if (m.type === "channel-reply" && m.channelId === params.channelId && m.msgId === msgId && m.reply) {
+            if (m.type === "channel-reply" && m.channelId === channelId && m.msgId === msgId && m.reply) {
               replies.push(`${m.reply.from.slice(0, 8)}: ${m.reply.content}`);
               if (replies.length >= params.waitMin!) {
                 clearTimeout(timer);
