@@ -512,9 +512,8 @@ export default function termxExtension(pi: ExtensionAPI) {
       const msgId = (result.data as any)?.msgId;
 
       // 异步模式
-      const preview = params.content.length > 80 ? params.content.slice(0, 80) + '...' : params.content;
       if (!params.waitMin || params.waitMin <= 0) {
-        return { content: [{ type: "text", text: `Broadcast sent to ${channelId} (msg: ${msgId}): "${preview}"\n\n--- full content ---\n${params.content}` }] };
+        return { content: [{ type: "text", text: `Broadcast sent to ${channelId} (msg: ${msgId})\n\n--- full content ---\n${params.content}` }] };
       }
 
       // 同步等待回复
