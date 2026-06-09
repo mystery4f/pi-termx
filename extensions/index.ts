@@ -515,7 +515,7 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // 异步模式
       if (!params.waitMin || params.waitMin <= 0) {
-        return { content: [{ type: "text", text: `Broadcast sent to ${channelName || channelId} (msg: ${msgId})` }] };
+        return { content: [{ type: "text", text: `Broadcast sent to ${channelName || channelId} (${channelId}, msg: ${msgId})` }] };
       }
 
       // 同步等待回复
