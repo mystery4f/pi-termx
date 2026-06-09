@@ -476,24 +476,26 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // 频道广播：支持按名称查找（如 "global"），默认用 tab 频道
       let channelId = params.channelId;
+      let channelName = '';
       if (channelId && !channelId.startsWith('ch-')) {
         // 按名称查找频道
         const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
         if (listResult.ok) {
           const found = (listResult.data as any).channels.find((c: any) => c.name === channelId);
-          if (found) channelId = found.id;
+          if (found) { channelName = found.name; channelId = found.id; }
         }
       }
       if (!channelId) {
         if (cachedTabChannelId) {
           channelId = cachedTabChannelId;
+          channelName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
         } else {
           // fallback: 查找 tab 频道
           const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
           if (listResult.ok) {
             const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
             const tabCh = (listResult.data as any).channels.find((c: any) => c.name === tabChName);
-            if (tabCh) { channelId = tabCh.id; cachedTabChannelId = tabCh.id; }
+            if (tabCh) { channelId = tabCh.id; channelName = tabCh.name; cachedTabChannelId = tabCh.id; }
           }
         }
         if (!channelId) {
@@ -513,7 +515,7 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // 异步模式
       if (!params.waitMin || params.waitMin <= 0) {
-        return { content: [{ type: "text", text: `Broadcast sent to ${channelId} (msg: ${msgId})` }] };
+        return { content: [{ type: "text", text: `Broadcast sent to ${channelName || channelId} (msg: ${msgId})` }] };
       }
 
       // 同步等待回复
