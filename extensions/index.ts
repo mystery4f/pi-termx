@@ -178,7 +178,7 @@ export default function termxExtension(pi: ExtensionAPI) {
     "CRITICAL RULES:",
     "  1. Always prefer your tab channel for broadcasting. termx_broadcast() defaults to it.",
     "  2. Use global ONLY when you need to reach agents in other tabs.",
-    "  3. Prefer async messaging — omit waitMin. Replies arrive automatically.",
+    "  3. Always prefer async — omit waitMin/wait. Replies arrive automatically via WS. Only block when you MUST wait for a response.",
     "  4. After broadcasting, do NOT follow up with individual termx_ask. Broadcast IS the notification.",
     "  5. Do NOT create channels unless explicitly asked.",
     "",
