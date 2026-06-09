@@ -63,17 +63,34 @@ export default function termxExtension(pi: ExtensionAPI) {
   let paneId = PANE_ID;
   let cachedTabChannelId: string | null = null;
   const TERMX_TAB_ID = process.env.TERMX_TAB_ID || '';
+  const channelIdNameMap = new Map<string, string>(); // channelId → name
+
+  async function refreshChannelNames(): Promise<void> {
+    try {
+      const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
+      if (listResult.ok) {
+        for (const c of (listResult.data as any).channels as { id: string; name: string }[]) {
+          channelIdNameMap.set(c.id, c.name);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  function chLabel(chId: string): string {
+    const name = channelIdNameMap.get(chId);
+    return name ? `${name} (${chId})` : chId;
+  }
 
   // ── WS 收消息 ──
 
   pi.on("session_start", async () => {
-    // 缓存 tab 频道 ID
+    // 缓存频道名和 tab 频道 ID
+    await refreshChannelNames();
+    cachedTabChannelId = channelIdNameMap.entries().find?.(() => false) ?? null;
     try {
-      const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
-      if (listResult.ok) {
-        const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
-        const tabCh = (listResult.data as any).channels.find((c: any) => c.name === tabChName);
-        if (tabCh) cachedTabChannelId = tabCh.id;
+      const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
+      for (const [id, name] of channelIdNameMap) {
+        if (name === tabChName) { cachedTabChannelId = id; break; }
       }
     } catch { /* ignore */ }
     try {
@@ -94,7 +111,7 @@ export default function termxExtension(pi: ExtensionAPI) {
               {
                 customType: "termx-message",
                 content: [
-                  `📢 #${chMsg.channelId} ${chMsg.channelMessage.from.slice(0, 8)} [${chMsg.channelMessage.id}]${tag}`,
+                  `📢 ${chLabel(chMsg.channelId)} ${chMsg.channelMessage.from.slice(0, 8)} [${chMsg.channelMessage.id}]${tag}`,
                   `"${chMsg.channelMessage.content}"`,
                   `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
                 ].join("\n"),
@@ -112,7 +129,7 @@ export default function termxExtension(pi: ExtensionAPI) {
             pi.sendMessage(
               {
                 customType: "termx-message",
-                content: `📢 #${chReply.channelId} ${chReply.reply.from.slice(0, 8)} [${chReply.msgId}] reply: "${chReply.reply.content}"`,
+                content: `📢 ${chLabel(chReply.channelId)} ${chReply.reply.from.slice(0, 8)} [${chReply.msgId}] reply: "${chReply.reply.content}"`,
                 display: true,
                 details: chReply,
               },
@@ -476,26 +493,24 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // 频道广播：支持按名称查找（如 "global"），默认用 tab 频道
       let channelId = params.channelId;
-      let channelName = '';
       if (channelId && !channelId.startsWith('ch-')) {
         // 按名称查找频道
         const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
         if (listResult.ok) {
           const found = (listResult.data as any).channels.find((c: any) => c.name === channelId);
-          if (found) { channelName = found.name; channelId = found.id; }
+          if (found) channelId = found.id;
         }
       }
       if (!channelId) {
         if (cachedTabChannelId) {
           channelId = cachedTabChannelId;
-          channelName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
         } else {
           // fallback: 查找 tab 频道
           const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
           if (listResult.ok) {
             const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
             const tabCh = (listResult.data as any).channels.find((c: any) => c.name === tabChName);
-            if (tabCh) { channelId = tabCh.id; channelName = tabCh.name; cachedTabChannelId = tabCh.id; }
+            if (tabCh) { channelId = tabCh.id; cachedTabChannelId = tabCh.id; }
           }
         }
         if (!channelId) {
@@ -515,7 +530,7 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // 异步模式
       if (!params.waitMin || params.waitMin <= 0) {
-        return { content: [{ type: "text", text: `Broadcast sent to ${channelName || channelId} (${channelId}, msg: ${msgId})` }] };
+        return { content: [{ type: "text", text: `Broadcast sent to ${chLabel(channelId)} (msg: ${msgId})` }] };
       }
 
       // 同步等待回复
