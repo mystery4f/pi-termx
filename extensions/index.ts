@@ -62,6 +62,7 @@ export default function termxExtension(pi: ExtensionAPI) {
   let ws: WebSocket | null = null;
   let paneId = PANE_ID;
   let cachedTabChannelId: string | null = null;
+  const TERMX_TAB_ID = process.env.TERMX_TAB_ID || '';
 
   // ── WS 收消息 ──
 
