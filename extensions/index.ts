@@ -105,20 +105,26 @@ export default function termxExtension(pi: ExtensionAPI) {
 
           // 频道消息
           if (envelope.type === "channel-message" && envelope.channelMessage) {
-            const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask' } };
+            const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask'; isSelf?: boolean } };
+            const isSelf = chMsg.channelMessage.isSelf;
             const tag = chMsg.channelMessage.type === 'ask' ? " (reply expected)" : "";
+            const prefix = isSelf ? "📤" : "📢";
+            const fromLabel = isSelf ? "You" : chMsg.channelMessage.from.slice(0, 8);
+            const replyHint = isSelf
+              ? "→ Waiting for replies via WS"
+              : `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...")`;
             pi.sendMessage(
               {
                 customType: "termx-message",
                 content: [
-                  `📢 ${chLabel(chMsg.channelId)} ${chMsg.channelMessage.from.slice(0, 8)} [${chMsg.channelMessage.id}]${tag}`,
+                  `${prefix} ${chLabel(chMsg.channelId)} ${fromLabel} [${chMsg.channelMessage.id}]${tag}`,
                   `"${chMsg.channelMessage.content}"`,
-                  `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...", ...)`,
+                  replyHint,
                 ].join("\n"),
                 display: true,
                 details: chMsg,
               },
-              { triggerTurn: true },
+              { triggerTurn: !isSelf },  // 自己发的消息不触发新 turn
             );
             return;
           }
@@ -134,6 +140,25 @@ export default function termxExtension(pi: ExtensionAPI) {
                 details: chReply,
               },
               { triggerTurn: true },
+            );
+            return;
+          }
+
+          
+          // 自己发送的消息回显
+          if (envelope.type === "message-sent" && envelope.message) {
+            const sent = envelope.message as { id: string; from: string; to: string; content: string; type?: string };
+            pi.sendMessage(
+              {
+                customType: "termx-message",
+                content: [
+                  `📤 You → ${sent.to.slice(0, 8)} [${sent.id}]${sent.type === 'ask' ? ' (ask)' : ''}`,
+                  `"${sent.content}"`,
+                ].join("\n"),
+                display: true,
+                details: sent,
+              },
+              { triggerTurn: false },  // 不触发 turn
             );
             return;
           }
@@ -270,9 +295,12 @@ export default function termxExtension(pi: ExtensionAPI) {
       const result = await api(endpoint, body);
       if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
 
-      // reply / async → 直接返回
+      // reply / async → 直接返回（包含发送内容让 LLM 看到自己发了什么）
       if (!isSync) {
-        return { content: [{ type: "text", text: params.replyTo ? "Replied" : `Sent (id: ${(result.data as any)?.id})` }] };
+        if (params.replyTo) {
+          return { content: [{ type: "text", text: `Replied to ${params.replyTo}: "${params.content}"` }] };
+        }
+        return { content: [{ type: "text", text: [`\u{1F4E4} You \u2192 ${params.targetPaneId.slice(0, 8)} [${(result.data as any)?.id}]`, `"${params.content}"`].join("\n") }] };
       }
 
       // sync → 连 WS 等回复
@@ -488,7 +516,7 @@ export default function termxExtension(pi: ExtensionAPI) {
           });
           if (result.ok) sent++;
         }
-        return { content: [{ type: "text", text: `Broadcast sent to ${sent}/${params.targetPaneIds.length} panes` }] };
+        return { content: [{ type: "text", text: `\u{1F4E4} Broadcast to ${sent}/${params.targetPaneIds.length} panes:\n"${params.content}"` }] };
       }
 
       // 频道广播：支持按名称查找（如 "global"），默认用 tab 频道
@@ -530,7 +558,7 @@ export default function termxExtension(pi: ExtensionAPI) {
 
       // 异步模式
       if (!params.waitMin || params.waitMin <= 0) {
-        return { content: [{ type: "text", text: `Broadcast sent to ${chLabel(channelId)} (msg: ${msgId})` }] };
+        return { content: [{ type: "text", text: [`\u{1F4E4} Broadcast to ${chLabel(channelId)} [${msgId}]`, `"${params.content}"`].join("\n") }] };
       }
 
       // 同步等待回复
