@@ -1,9 +1,14 @@
 /**
- * TermX Extension - 消息收发
+ * TermX Extension — 消息收发 + Agent 协作
  *
- * termx_list_panes: 找其他 pane
- * termx_ask: 发消息(同步等回复 / 异步 / 回复)
- * WS 收消息自动触发 turn
+ * 工具:
+ *   termx_set_label    — 标记当前工作内容
+ *   termx_list_panes   — 列出所有 pane
+ *   termx_list_agents  — 列出 .pi/agents/*.md 配置
+ *   termx_spawn_agent  — 生成新 agent
+ *   termx_ask          — 1v1 消息（同步/异步/回复）
+ *   termx_channel      — 频道管理
+ *   termx_broadcast    — 频道/定向广播
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -15,41 +20,167 @@ import { homedir } from "node:os";
 import { discoverAgents, getAgent } from "./agents";
 import { buildSpawnCommand, cleanupTempDir } from "./spawn";
 
-// 当前 extension 入口路径，用于注入到新 pi 实例
-const PI_TERMX_EXTENSION = __filename;
-// pi-termx package 根目录
-const PI_TERMX_ROOT = join(__dirname, "..");
+// ── 常量 ──
 
-const PORT = process.env.TERMX_PORT;
-const TOKEN = process.env.TERMX_TOKEN;
+const PORT = process.env.TERMX_PORT || "";
+const TOKEN = process.env.TERMX_TOKEN || "";
 const PANE_ID = process.env.TERMX_PANE_ID || "";
-
+const TERMX_TAB_ID = process.env.TERMX_TAB_ID || "";
 const IS_TERMX = !!(PORT && TOKEN && PANE_ID);
 
-function api(endpoint: string, body: Record<string, unknown>): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+const PI_TERMX_EXTENSION = __filename;
+
+// ── 类型定义 ──
+
+/** HTTP API 统一响应 */
+interface ApiResponse<T = unknown> { ok: boolean; data?: T; error?: string; }
+
+/** WS 信封 — 统一解析类型 */
+interface WsEnvelope {
+  type: string;
+  message?: { id: string; from: string; to: string; content: string; type?: string; status?: string; replyTo?: string; reply?: string; timestamp?: number };
+  channelId?: string;
+  channelMessage?: { id: string; from: string; content: string; type: "broadcast" | "ask"; isSelf?: boolean };
+  msgId?: string;
+  reply?: { from: string; content: string };
+}
+
+/** 工具返回值简写 */
+type ToolResult = { content: [{ type: "text"; text: string }] };
+
+// ── 辅助函数 ──
+
+/** 构造文本工具返回 */
+function textResult(text: string): ToolResult {
+  return { content: [{ type: "text", text }] };
+}
+
+/** 构造错误工具返回 */
+function errorResult(error?: string): ToolResult {
+  return textResult(`Error: ${error || "Unknown error"}`);
+}
+
+/** 截取 paneId 前缀 */
+function short(id: string): string {
+  return id.slice(0, 8);
+}
+
+/** HTTP POST 到 TermX CliServer */
+function api(endpoint: string, body: Record<string, unknown>): Promise<ApiResponse> {
   const postData = JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
-        hostname: "127.0.0.1", port: parseInt(PORT!, 10), path: endpoint, method: "POST",
+        hostname: "127.0.0.1",
+        port: parseInt(PORT, 10),
+        path: endpoint,
+        method: "POST",
         headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(postData) },
         timeout: 5000,
       },
       (res) => {
         let data = "";
         res.on("data", (c: Buffer) => { data += c; });
-        res.on("end", () => { try { resolve(JSON.parse(data)); } catch { reject(new Error("Invalid response")); } });
+        res.on("end", () => {
+          try { resolve(JSON.parse(data)); }
+          catch { reject(new Error("Invalid response")); }
+        });
       },
     );
     req.on("error", reject);
-    req.on("timeout", () => { reject(new Error("Timeout")); req.destroy(); });
+    req.on("timeout", () => { req.destroy(); reject(new Error("Timeout")); });
     req.write(postData);
     req.end();
   });
 }
 
+/**
+ * 同步等待 WS 回复的通用辅助。
+ * 处理 WS 生命周期（创建/超时/取消/错误），调用方只需提供 onMessage 匹配逻辑。
+ */
+function openSyncWs(opts: {
+  listenType: "listen" | "listen-channel";
+  timeoutMs: number;
+  signal?: AbortSignal;
+  onTimeout: string;
+  onError: string;
+  onMessage: (raw: string, finish: (text: string) => void) => void;
+}): Promise<string> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
+    const finish = (text: string) => { clearTimeout(timer); ws.close(); resolve(text); };
+    const timer = setTimeout(() => { ws.close(); resolve(opts.onTimeout); }, opts.timeoutMs);
+
+    opts.signal?.addEventListener("abort", () => finish("Cancelled"));
+
+    ws.on("open", () => ws.send(JSON.stringify({ type: opts.listenType, paneId: PANE_ID, token: TOKEN })));
+    ws.on("message", (raw) => opts.onMessage(raw.toString(), finish));
+    ws.on("error", () => { clearTimeout(timer); resolve(opts.onError); });
+  });
+}
+
+// ── 频道名缓存与解析 ──
+
+const channelIdNameMap = new Map<string, string>();
+let cachedTabChannelId: string | null = null;
+
+/** 格式化频道标签: name (id) 或 id */
+function chLabel(chId: string): string {
+  const name = channelIdNameMap.get(chId);
+  return name ? `${name} (${chId})` : chId;
+}
+
+/** 刷新频道名缓存 */
+async function refreshChannelNames(): Promise<void> {
+  try {
+    const result = await api("/api/channel/list", { token: TOKEN, paneId: PANE_ID });
+    if (result.ok && result.data) {
+      for (const c of (result.data as { channels: { id: string; name: string }[] }).channels) {
+        channelIdNameMap.set(c.id, c.name);
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * 将 channelId 或名称解析为内部 ID。
+ * - 已是 ch-* 格式 → 直接返回
+ * - 给了名称 → 按名称查找
+ * - 未指定 → 返回 tab 频道 ID（默认广播目标）
+ * 返回 null 表示无法解析。
+ */
+async function resolveChannelId(channelIdOrName?: string): Promise<string | null> {
+  // 显式 ID
+  if (channelIdOrName?.startsWith("ch-")) return channelIdOrName;
+
+  // 默认 tab 频道：优先用缓存，避免多余 API 调用
+  if (!channelIdOrName && cachedTabChannelId) return cachedTabChannelId;
+
+  // 需要频道列表（名称查找或 tab 频道首次解析）
+  const result = await api("/api/channel/list", { token: TOKEN, paneId: PANE_ID });
+  if (!result.ok || !result.data) return null;
+
+  const channels = (result.data as { channels: { id: string; name: string }[] }).channels;
+  for (const c of channels) channelIdNameMap.set(c.id, c.name); // 顺便刷新缓存
+
+  // 名称查找
+  if (channelIdOrName) {
+    const found = channels.find((c) => c.name === channelIdOrName);
+    return found ? found.id : null;
+  }
+
+  // 默认：tab 频道
+  const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
+  const tabCh = channels.find((c) => c.name === tabChName);
+  if (tabCh) { cachedTabChannelId = tabCh.id; return tabCh.id; }
+
+  return null;
+}
+
+// ── 扩展入口 ──
+
 export default function termxExtension(pi: ExtensionAPI) {
-  if (!IS_TERMX) return; // 不在 TermX 中,静默跳过
+  if (!IS_TERMX) return; // 不在 TermX 中，静默跳过
 
   // 收集本扩展注册的工具名，用于 spawn 时注入 --tools 白名单
   const registeredToolNames: string[] = [];
@@ -60,118 +191,94 @@ export default function termxExtension(pi: ExtensionAPI) {
   };
 
   let ws: WebSocket | null = null;
-  let paneId = PANE_ID;
-  let cachedTabChannelId: string | null = null;
-  const TERMX_TAB_ID = process.env.TERMX_TAB_ID || '';
-  const channelIdNameMap = new Map<string, string>(); // channelId → name
-
-  async function refreshChannelNames(): Promise<void> {
-    try {
-      const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
-      if (listResult.ok) {
-        for (const c of (listResult.data as any).channels as { id: string; name: string }[]) {
-          channelIdNameMap.set(c.id, c.name);
-        }
-      }
-    } catch { /* ignore */ }
-  }
-
-  function chLabel(chId: string): string {
-    const name = channelIdNameMap.get(chId);
-    return name ? `${name} (${chId})` : chId;
-  }
 
   // ── WS 收消息 ──
 
   pi.on("session_start", async () => {
-    // 缓存频道名和 tab 频道 ID
+    // 刷新频道名 + 缓存 tab 频道 ID
     await refreshChannelNames();
-    cachedTabChannelId = channelIdNameMap.entries().find?.(() => false) ?? null;
-    try {
-      const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
-      for (const [id, name] of channelIdNameMap) {
-        if (name === tabChName) { cachedTabChannelId = id; break; }
-      }
-    } catch { /* ignore */ }
+    const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
+    for (const [id, name] of channelIdNameMap) {
+      if (name === tabChName) { cachedTabChannelId = id; break; }
+    }
+
     try {
       ws = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
       ws.on("open", () => {
-        ws!.send(JSON.stringify({ type: "listen", paneId, token: TOKEN }));
-        ws!.send(JSON.stringify({ type: "listen-channel", paneId, token: TOKEN }));
+        ws!.send(JSON.stringify({ type: "listen", paneId: PANE_ID, token: TOKEN }));
+        ws!.send(JSON.stringify({ type: "listen-channel", paneId: PANE_ID, token: TOKEN }));
       });
       ws.on("message", (raw) => {
-        try {
-          const envelope = JSON.parse(raw.toString()) as { type: string; message?: Record<string, unknown>; channelId?: string; channelMessage?: { id: string; from: string; content: string }; msgId?: string; reply?: { from: string; content: string } };
+        let envelope: WsEnvelope;
+        try { envelope = JSON.parse(raw.toString()) as WsEnvelope; }
+        catch { return; }
 
-          // 频道消息
-          if (envelope.type === "channel-message" && envelope.channelMessage) {
-            const chMsg = envelope as typeof envelope & { channelMessage: { id: string; from: string; content: string; type: 'broadcast' | 'ask'; isSelf?: boolean } };
-            const isSelf = chMsg.channelMessage.isSelf;
-            const tag = chMsg.channelMessage.type === 'ask' ? " (reply expected)" : "";
-            const prefix = isSelf ? "📤" : "📢";
-            const fromLabel = isSelf ? "You" : chMsg.channelMessage.from.slice(0, 8);
-            const replyHint = isSelf
-              ? "→ Waiting for replies via WS"
-              : `→ Reply: termx_broadcast(channelId="${chMsg.channelId}", content="...")`;
-            pi.sendMessage(
-              {
-                customType: "termx-message",
-                content: [
-                  `${prefix} ${chLabel(chMsg.channelId)} ${fromLabel} [${chMsg.channelMessage.id}]${tag}`,
-                  `"${chMsg.channelMessage.content}"`,
-                  replyHint,
-                ].join("\n"),
-                display: true,
-                details: chMsg,
-              },
-              { triggerTurn: !isSelf },  // 自己发的消息不触发新 turn
-            );
-            return;
-          }
-
-          // 频道回复
-          if (envelope.type === "channel-reply" && envelope.reply) {
-            const chReply = envelope as typeof envelope & { channelId: string; msgId: string; reply: { from: string; content: string } };
-            pi.sendMessage(
-              {
-                customType: "termx-message",
-                content: `📢 ${chLabel(chReply.channelId)} ${chReply.reply.from.slice(0, 8)} [${chReply.msgId}] reply: "${chReply.reply.content}"`,
-                display: true,
-                details: chReply,
-              },
-              { triggerTurn: true },
-            );
-            return;
-          }
-
-          
-          // 自己发送的消息回显
-          if (envelope.type === "message-sent" && envelope.message) {
-            const sent = envelope.message as { id: string; from: string; to: string; content: string; type?: string };
-            pi.sendMessage(
-              {
-                customType: "termx-message",
-                content: [
-                  `📤 You → ${sent.to.slice(0, 8)} [${sent.id}]${sent.type === 'ask' ? ' (ask)' : ''}`,
-                  `"${sent.content}"`,
-                ].join("\n"),
-                display: true,
-                details: sent,
-              },
-              { triggerTurn: false },  // 不触发 turn
-            );
-            return;
-          }
-
-          // 1v1 消息
-          if (envelope.type !== "message" || !envelope.message || envelope.message.to !== paneId) return;
-          const msg = envelope.message as { id: string; from: string; content: string; replyTo?: string };
-
+        // ── 频道消息 ──
+        if (envelope.type === "channel-message" && envelope.channelMessage && envelope.channelId) {
+          const chMsg = envelope.channelMessage;
+          const isSelf = chMsg.isSelf;
+          const tag = chMsg.type === "ask" ? " (reply expected)" : "";
+          const prefix = isSelf ? "📤" : "📢";
+          const fromLabel = isSelf ? "You" : short(chMsg.from);
+          const replyHint = isSelf
+            ? "→ Waiting for replies via WS"
+            : `→ Reply: termx_broadcast(channelId="${envelope.channelId}", content="...")`;
           pi.sendMessage(
             {
               customType: "termx-message",
               content: [
-                `📩 ${msg.from.slice(0, 8)} [${msg.id}]`,
+                `${prefix} ${chLabel(envelope.channelId)} ${fromLabel} [${chMsg.id}]${tag}`,
+                `"${chMsg.content}"`,
+                replyHint,
+              ].join("\n"),
+              display: true,
+              details: envelope,
+            },
+            { triggerTurn: !isSelf },
+          );
+          return;
+        }
+
+        // ── 频道回复 ──
+        if (envelope.type === "channel-reply" && envelope.reply && envelope.channelId && envelope.msgId) {
+          pi.sendMessage(
+            {
+              customType: "termx-message",
+              content: `📢 ${chLabel(envelope.channelId)} ${short(envelope.reply.from)} [${envelope.msgId}] reply: "${envelope.reply.content}"`,
+              display: true,
+              details: envelope,
+            },
+            { triggerTurn: true },
+          );
+          return;
+        }
+
+        // ── 自己发送的 1v1 消息回显 ──
+        if (envelope.type === "message-sent" && envelope.message) {
+          const sent = envelope.message;
+          pi.sendMessage(
+            {
+              customType: "termx-message",
+              content: [
+                `📤 You → ${short(sent.to)} [${sent.id}]${sent.type === "ask" ? " (ask)" : ""}`,
+                `"${sent.content}"`,
+              ].join("\n"),
+              display: true,
+              details: sent,
+            },
+            { triggerTurn: false },
+          );
+          return;
+        }
+
+        // ── 1v1 消息 ──
+        if (envelope.type === "message" && envelope.message && envelope.message.to === PANE_ID) {
+          const msg = envelope.message;
+          pi.sendMessage(
+            {
+              customType: "termx-message",
+              content: [
+                `📩 ${short(msg.from)} [${msg.id}]`,
                 `"${msg.content}"`,
                 `→ Reply: termx_ask(targetPaneId="${msg.from}", content="...", replyTo="${msg.id}")`,
               ].join("\n"),
@@ -180,7 +287,7 @@ export default function termxExtension(pi: ExtensionAPI) {
             },
             { triggerTurn: true },
           );
-        } catch { /* ignore */ }
+        }
       });
     } catch { /* WS failed */ }
   });
@@ -189,10 +296,24 @@ export default function termxExtension(pi: ExtensionAPI) {
     if (ws) { ws.close(); ws = null; }
   });
 
-  // 自动标状态
+  // ── 自动状态追踪 ──
+
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // 静态 TermX 使用说明（每次都相同 → 系统提示词 hash 不变 → 缓存有效）
+  function setBusy(): void {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    api("/api/pane/label", { token: TOKEN, paneId: PANE_ID, targetPaneId: PANE_ID, status: "busy" }).catch(() => {});
+  }
+
+  function setIdleDelayed(): void {
+    idleTimer = setTimeout(() => {
+      api("/api/pane/label", { token: TOKEN, paneId: PANE_ID, targetPaneId: PANE_ID, status: "idle" }).catch(() => {});
+      idleTimer = null;
+    }, 5000);
+  }
+
+  // ── 系统提示词注入 ──
+
   const TERMX_USAGE_BLOCK = [
     "",
     "## TermX Workspace",
@@ -219,17 +340,17 @@ export default function termxExtension(pi: ExtensionAPI) {
   ].join("\n");
 
   pi.on("before_agent_start", async (event) => {
-    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-    api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, status: "busy" }).catch(() => {});
+    setBusy();
     return { systemPrompt: event.systemPrompt + TERMX_USAGE_BLOCK };
   });
   pi.on("turn_end", async () => {
     // 延迟 5s——如果新一轮马上开始就取消，否则才标 idle
-    idleTimer = setTimeout(() => {
-      api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, status: "idle" }).catch(() => {});
-      idleTimer = null;
-    }, 5000);
+    setIdleDelayed();
   });
+
+  // ════════════════════════════════════════
+  //  工具注册
+  // ════════════════════════════════════════
 
   // ── termx_set_label ──
 
@@ -241,9 +362,8 @@ export default function termxExtension(pi: ExtensionAPI) {
       label: Type.String({ description: "What you are working on (e.g., 'auth module refactor')" }),
     }),
     async execute(_id, params) {
-      const result = await api("/api/pane/label", { token: TOKEN, paneId, targetPaneId: paneId, label: params.label });
-      if (result.ok) return { content: [{ type: "text", text: `Label set: ${params.label}` }] };
-      return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+      const result = await api("/api/pane/label", { token: TOKEN, paneId: PANE_ID, targetPaneId: PANE_ID, label: params.label });
+      return result.ok ? textResult(`Label set: ${params.label}`) : errorResult(result.error);
     },
   });
 
@@ -258,12 +378,11 @@ export default function termxExtension(pi: ExtensionAPI) {
       tabIndex: Type.Optional(Type.Number()),
     }),
     async execute(_id, params) {
-      const body: Record<string, unknown> = { token: TOKEN, paneId };
+      const body: Record<string, unknown> = { token: TOKEN, paneId: PANE_ID };
       if (params.allTabs) body.allTabs = true;
       if (params.tabIndex !== undefined) body.tabIndex = params.tabIndex;
       const result = await api("/api/pane/list", body);
-      if (result.ok) return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
-      return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+      return result.ok ? textResult(JSON.stringify(result.data, null, 2)) : errorResult(result.error);
     },
   });
 
@@ -281,52 +400,47 @@ export default function termxExtension(pi: ExtensionAPI) {
       replyTo: Type.Optional(Type.String({ description: "Reply to this message ID" })),
     }),
     async execute(_id, params, signal) {
-      // 选 endpoint
       const isSync = params.wait && !params.replyTo;
       const endpoint = params.replyTo ? "/api/msg/reply" : isSync ? "/api/msg/ask" : "/api/msg/send";
 
       const body: Record<string, unknown> = {
-        token: TOKEN, paneId,
+        token: TOKEN, paneId: PANE_ID,
         targetPaneId: params.targetPaneId,
         content: params.content,
       };
       if (params.replyTo) body.msgId = params.replyTo;
 
       const result = await api(endpoint, body);
-      if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+      if (!result.ok) return errorResult(result.error);
 
-      // reply / async → 直接返回（包含发送内容让 LLM 看到自己发了什么）
+      // reply / async → 直接返回
       if (!isSync) {
         if (params.replyTo) {
-          return { content: [{ type: "text", text: `Replied to ${params.replyTo}: "${params.content}"` }] };
+          return textResult(`Replied to ${params.replyTo}: "${params.content}"`);
         }
-        return { content: [{ type: "text", text: [`\u{1F4E4} You \u2192 ${params.targetPaneId.slice(0, 8)} [${(result.data as any)?.id}]`, `"${params.content}"`].join("\n") }] };
+        const msgId = (result.data as { id?: string })?.id;
+        return textResult(`📤 You → ${short(params.targetPaneId)} [${msgId}]\n"${params.content}"`);
       }
 
       // sync → 连 WS 等回复
-      const msgId = (result.data as any)?.id;
+      const msgId = (result.data as { id?: string })?.id;
       const timeoutMs = params.timeout || 120_000;
-      return new Promise((resolve) => {
-        const wsAsk = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
-        const timer = setTimeout(() => {
-          wsAsk.close();
-          resolve({ content: [{ type: "text", text: `Timed out after ${timeoutMs / 1000}s — no reply` }] });
-        }, timeoutMs);
-
-        signal?.addEventListener("abort", () => { clearTimeout(timer); wsAsk.close(); resolve({ content: [{ type: "text", text: "Cancelled" }] }); });
-
-        wsAsk.on("open", () => wsAsk.send(JSON.stringify({ type: "listen", paneId, token: TOKEN })));
-        wsAsk.on("message", (raw) => {
+      const reply = await openSyncWs({
+        listenType: "listen",
+        timeoutMs,
+        signal,
+        onTimeout: `Timed out after ${timeoutMs / 1000}s — no reply`,
+        onError: "Ask failed",
+        onMessage: (raw, finish) => {
           try {
-            const m = JSON.parse(raw.toString()) as { type: string; message?: { replyTo?: string; content: string } };
-            if (m.type === "message" && m.message?.replyTo === msgId) {
-              clearTimeout(timer); wsAsk.close();
-              resolve({ content: [{ type: "text", text: `Reply: ${m.message.content}` }] });
+            const m = JSON.parse(raw) as WsEnvelope;
+            if (m.type === "message" && m.message && m.message.replyTo === msgId) {
+              finish(`Reply: ${m.message.content}`);
             }
           } catch { /* ignore */ }
-        });
-        wsAsk.on("error", () => { clearTimeout(timer); resolve({ content: [{ type: "text", text: "Ask failed" }] }); });
+        },
       });
+      return textResult(reply);
     },
   });
 
@@ -351,7 +465,7 @@ export default function termxExtension(pi: ExtensionAPI) {
         cwd: a.cwd || "(default)",
         source: a.source,
       }));
-      return { content: [{ type: "text", text: JSON.stringify(agents, null, 2) }] };
+      return textResult(JSON.stringify(agents, null, 2));
     },
   });
 
@@ -367,7 +481,7 @@ export default function termxExtension(pi: ExtensionAPI) {
     }),
     async execute(_id, params) {
       const agent = getAgent(params.name);
-      if (!agent) return { content: [{ type: "text", text: `Agent "${params.name}" not found. Use termx_list_agents to see available agents.` }] };
+      if (!agent) return errorResult(`Agent "${params.name}" not found. Use termx_list_agents to see available agents.`);
 
       // 解析 model
       let model = agent.model;
@@ -376,12 +490,11 @@ export default function termxExtension(pi: ExtensionAPI) {
           const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
           const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
           model = settings.defaultModel;
-        } catch { /* use settings default */ }
+        } catch { /* use default */ }
       }
 
-      // 构建 spawn 命令 (借鉴 pi-subagents 的 buildPiArgs)
-      const piTermxRoot = join(__dirname, "..");
-      const { spawn: spawnSpec, tempDir } = buildSpawnCommand({
+      // 构建 spawn 命令
+      const { command, args, tempDir } = buildSpawnCommand({
         model,
         thinking: agent.thinking,
         tools: agent.tools,
@@ -395,13 +508,13 @@ export default function termxExtension(pi: ExtensionAPI) {
         cwd: agent.cwd || process.env.TERMX_CWD || process.cwd(),
         // TermX 基础设施：始终注入
         termxExtension: PI_TERMX_EXTENSION,
-        termxSkills: [join(piTermxRoot, "skills", "termx-swarm")],
+        termxSkills: [join(__dirname, "..", "skills", "termx-swarm")],
         termxTools: registeredToolNames,
       });
 
       // 构建 shell 命令字符串
       const cwd = (agent.cwd || process.env.TERMX_CWD || process.cwd()).replace(/\\/g, "/");
-      const cmdStr = [spawnSpec.command, ...spawnSpec.args]
+      const cmdStr = [command, ...args]
         .map((s) => /[ \"']/.test(s) ? `"${s}"` : s)
         .join(" ");
       const fullCmd = cwd ? `cd "${cwd}" && ${cmdStr}` : cmdStr;
@@ -409,16 +522,12 @@ export default function termxExtension(pi: ExtensionAPI) {
       console.log("[pi-termx] spawn command:", fullCmd);
 
       // 创建 pane
-      const spawnResult = await api("/api/pane/spawn", {
-        token: TOKEN, paneId,
-        command: fullCmd,
-      });
-
+      const spawnResult = await api("/api/pane/spawn", { token: TOKEN, paneId: PANE_ID, command: fullCmd });
       cleanupTempDir(tempDir);
 
-      if (!spawnResult.ok) return { content: [{ type: "text", text: `Error spawning: ${spawnResult.error}` }] };
-      const targetPaneId = (spawnResult.data as any)?.paneId;
-      if (!targetPaneId) return { content: [{ type: "text", text: "Spawned but no paneId returned" }] };
+      if (!spawnResult.ok) return errorResult(spawnResult.error);
+      const targetPaneId = (spawnResult.data as { paneId?: string })?.paneId;
+      if (!targetPaneId) return textResult("Spawned but no paneId returned");
 
       return {
         content: [{
@@ -449,43 +558,37 @@ export default function termxExtension(pi: ExtensionAPI) {
       mode: Type.Optional(Type.Union([Type.Literal("full"), Type.Literal("pubsub")], { description: "Visibility mode: full=all members see replies, pubsub=only sender sees replies. Default: full" })),
     }),
     async execute(_id, params) {
-      const body: Record<string, unknown> = { token: TOKEN, paneId };
+      const base: Record<string, unknown> = { token: TOKEN, paneId: PANE_ID };
 
       switch (params.action) {
         case "create": {
-          if (!params.name) return { content: [{ type: "text", text: "Error: name is required for create" }] };
-          body.name = params.name;
-          if (params.mode) body.mode = params.mode;
-          const result = await api("/api/channel/create", body);
-          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+          if (!params.name) return errorResult("name is required for create");
+          base.name = params.name;
+          if (params.mode) base.mode = params.mode;
+          const result = await api("/api/channel/create", base);
+          if (!result.ok) return errorResult(result.error);
           const data = result.data as { channelId: string; name: string; mode: string };
-          return { content: [{ type: "text", text: `Channel created: ${data.channelId} (#${data.name}, ${data.mode} mode)` }] };
+          return textResult(`Channel created: ${data.channelId} (#${data.name}, ${data.mode} mode)`);
         }
         case "join": {
-          if (!params.channelId) return { content: [{ type: "text", text: "Error: channelId is required for join" }] };
-          body.channelId = params.channelId;
-          const result = await api("/api/channel/join", body);
-          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
-          return { content: [{ type: "text", text: `Joined channel ${params.channelId}` }] };
+          if (!params.channelId) return errorResult("channelId is required for join");
+          const result = await api("/api/channel/join", { ...base, channelId: params.channelId });
+          return result.ok ? textResult(`Joined channel ${params.channelId}`) : errorResult(result.error);
         }
         case "leave": {
-          if (!params.channelId) return { content: [{ type: "text", text: "Error: channelId is required for leave" }] };
-          body.channelId = params.channelId;
-          const result = await api("/api/channel/leave", body);
-          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
-          return { content: [{ type: "text", text: `Left channel ${params.channelId}` }] };
+          if (!params.channelId) return errorResult("channelId is required for leave");
+          const result = await api("/api/channel/leave", { ...base, channelId: params.channelId });
+          return result.ok ? textResult(`Left channel ${params.channelId}`) : errorResult(result.error);
         }
         case "list": {
-          const result = await api("/api/channel/list", body);
-          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
-          return { content: [{ type: "text", text: JSON.stringify((result.data as any).channels, null, 2) }] };
+          const result = await api("/api/channel/list", base);
+          if (!result.ok) return errorResult(result.error);
+          return textResult(JSON.stringify((result.data as { channels: unknown }).channels, null, 2));
         }
         case "info": {
-          if (!params.channelId) return { content: [{ type: "text", text: "Error: channelId is required for info" }] };
-          body.channelId = params.channelId;
-          const result = await api("/api/channel/info", body);
-          if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
-          return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+          if (!params.channelId) return errorResult("channelId is required for info");
+          const result = await api("/api/channel/info", { ...base, channelId: params.channelId });
+          return result.ok ? textResult(JSON.stringify(result.data, null, 2)) : errorResult(result.error);
         }
       }
     },
@@ -505,90 +608,57 @@ export default function termxExtension(pi: ExtensionAPI) {
       timeout: Type.Optional(Type.Number({ description: "Max wait time in ms (default: 30000)" })),
     }),
     async execute(_id, params, signal) {
-      // 临时广播：targetPaneIds 模式
+      // ── 临时广播：targetPaneIds 模式 ──
       if (params.targetPaneIds && params.targetPaneIds.length > 0) {
         let sent = 0;
         for (const targetId of params.targetPaneIds) {
-          const result = await api("/api/msg/send", {
-            token: TOKEN, paneId,
-            targetPaneId: targetId,
-            content: params.content,
-          });
+          const result = await api("/api/msg/send", { token: TOKEN, paneId: PANE_ID, targetPaneId: targetId, content: params.content });
           if (result.ok) sent++;
         }
-        return { content: [{ type: "text", text: `\u{1F4E4} Broadcast to ${sent}/${params.targetPaneIds.length} panes:\n"${params.content}"` }] };
+        return textResult(`📤 Broadcast to ${sent}/${params.targetPaneIds.length} panes:\n"${params.content}"`);
       }
 
-      // 频道广播：支持按名称查找（如 "global"），默认用 tab 频道
-      let channelId = params.channelId;
-      if (channelId && !channelId.startsWith('ch-')) {
-        // 按名称查找频道
-        const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
-        if (listResult.ok) {
-          const found = (listResult.data as any).channels.find((c: any) => c.name === channelId);
-          if (found) channelId = found.id;
-        }
-      }
-      if (!channelId) {
-        if (cachedTabChannelId) {
-          channelId = cachedTabChannelId;
-        } else {
-          // fallback: 查找 tab 频道
-          const listResult = await api("/api/channel/list", { token: TOKEN, paneId });
-          if (listResult.ok) {
-            const tabChName = `tab-${TERMX_TAB_ID.slice(0, 8)}`;
-            const tabCh = (listResult.data as any).channels.find((c: any) => c.name === tabChName);
-            if (tabCh) { channelId = tabCh.id; cachedTabChannelId = tabCh.id; }
-          }
-        }
-        if (!channelId) {
-          return { content: [{ type: "text", text: "Error: no tab channel found, provide channelId explicitly" }] };
-        }
-      }
+      // ── 频道广播 ──
+      const channelId = await resolveChannelId(params.channelId);
+      if (!channelId) return errorResult("no tab channel found, provide channelId explicitly");
 
       const result = await api("/api/channel/broadcast", {
-        token: TOKEN, paneId,
+        token: TOKEN, paneId: PANE_ID,
         channelId,
         content: params.content,
         type: params.waitMin && params.waitMin > 0 ? "ask" : "broadcast",
       });
-      if (!result.ok) return { content: [{ type: "text", text: `Error: ${result.error}` }] };
+      if (!result.ok) return errorResult(result.error);
 
-      const msgId = (result.data as any)?.msgId;
+      const msgId = (result.data as { msgId?: string })?.msgId;
 
       // 异步模式
       if (!params.waitMin || params.waitMin <= 0) {
-        return { content: [{ type: "text", text: [`\u{1F4E4} Broadcast to ${chLabel(channelId)} [${msgId}]`, `"${params.content}"`].join("\n") }] };
+        return textResult(`📤 Broadcast to ${chLabel(channelId)} [${msgId}]\n"${params.content}"`);
       }
 
       // 同步等待回复
       const timeoutMs = params.timeout || 30_000;
-      return new Promise((resolve) => {
-        const wsBroadcast = new WebSocket(`ws://127.0.0.1:${PORT}/events`);
-        const timer = setTimeout(() => {
-          wsBroadcast.close();
-          resolve({ content: [{ type: "text", text: `Timed out after ${timeoutMs / 1000}s waiting for replies` }] });
-        }, timeoutMs);
-        const replies: string[] = [];
-
-        signal?.addEventListener("abort", () => { clearTimeout(timer); wsBroadcast.close(); resolve({ content: [{ type: "text", text: "Cancelled" }] }); });
-
-        wsBroadcast.on("open", () => wsBroadcast.send(JSON.stringify({ type: "listen-channel", paneId, token: TOKEN })));
-        wsBroadcast.on("message", (raw) => {
+      const replies: string[] = [];
+      const replyText = await openSyncWs({
+        listenType: "listen-channel",
+        timeoutMs,
+        signal,
+        onTimeout: `Timed out after ${timeoutMs / 1000}s waiting for replies`,
+        onError: "Broadcast wait failed",
+        onMessage: (raw, finish) => {
           try {
-            const m = JSON.parse(raw.toString()) as { type: string; channelId?: string; msgId?: string; reply?: { from: string; content: string } };
+            const m = JSON.parse(raw) as WsEnvelope;
             if (m.type === "channel-reply" && m.channelId === channelId && m.msgId === msgId && m.reply) {
-              replies.push(`${m.reply.from.slice(0, 8)}: ${m.reply.content}`);
+              replies.push(`${short(m.reply.from)}: ${m.reply.content}`);
               if (replies.length >= params.waitMin!) {
-                clearTimeout(timer);
-                wsBroadcast.close();
-                resolve({ content: [{ type: "text", text: `Received ${replies.length}/${params.waitMin} replies:\n${replies.join("\n")}` }] });
+                finish(`Received ${replies.length}/${params.waitMin} replies:\n${replies.join("\n")}`);
               }
             }
           } catch { /* ignore */ }
-        });
-        wsBroadcast.on("error", () => { clearTimeout(timer); resolve({ content: [{ type: "text", text: "Broadcast wait failed" }] }); });
+        },
       });
+      return textResult(replyText);
     },
   });
 }

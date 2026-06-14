@@ -16,11 +16,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 // 直接用 pi 命令，不走 Windows 路径解析
 
-interface PiSpawnCommand {
-  command: string;
-  args: string[];
-}
-
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const TASK_ARG_LIMIT = 8000;
 
@@ -56,8 +51,8 @@ export interface BuildSpawnInput {
 }
 
 export interface BuildSpawnResult {
-  spawn: PiSpawnCommand;
-  env: Record<string, string>;
+  command: string;
+  args: string[];
   tempDir?: string;
 }
 
@@ -69,23 +64,18 @@ export function buildSpawnCommand(input: BuildSpawnInput): BuildSpawnResult {
   if (input.thinking) args.push("--thinking", input.thinking);
 
   // ── extensions ──
-  // 始终注入 termxExtension (TermX 基础设施，不管 agent md 怎么配)
+  // agent 显式配置了 extensions（含空数组）→ --no-extensions + 显式列出
+  // agent 未配置 → additive 注入 termxExtension
   const allExtensions = [...new Set([
     ...(input.termxExtension ? [input.termxExtension] : []),
     ...(input.extensions ?? []),
   ])];
 
-  if (input.extensions !== undefined && input.extensions.length >= 0) {
-    // agent 配了 extensions → --no-extensions，显式列出全部
+  if (input.extensions !== undefined) {
     args.push("--no-extensions");
-    for (const ext of allExtensions) {
-      args.push("--extension", ext);
-    }
-  } else {
-    // agent 没配 → additive 注入 termxExtension
-    for (const ext of allExtensions) {
-      args.push("--extension", ext);
-    }
+  }
+  for (const ext of allExtensions) {
+    args.push("--extension", ext);
   }
 
   // ── tools ──
@@ -145,16 +135,10 @@ export function buildSpawnCommand(input: BuildSpawnInput): BuildSpawnResult {
     args.push(`Task: ${input.task}`);
   }
 
-  // ── 环境变量 ──
-  const env: Record<string, string> = {};
-  // 传递 TERMX_* 环境变量给子进程 (pane 已注入，但显式传递更可靠)
-  if (process.env.TERMX_PORT) env.TERMX_PORT = process.env.TERMX_PORT;
-  if (process.env.TERMX_TOKEN) env.TERMX_TOKEN = process.env.TERMX_TOKEN;
-  // TERMX_PANE_ID 不传 — 新 pane 有自己的 ID
-
   // Windows 反斜杠在 bash 中是转义符，统一换为 /
+  // (env 变量 TERMX_PORT/TOKEN 已由 TermX pane 创建时注入，无需显式传递)
   const normalizedArgs = args.map((a) => a.replace(/\\/g, "/"));
-  return { spawn: { command: "pi", args: normalizedArgs }, env, tempDir };
+  return { command: "pi", args: normalizedArgs, tempDir };
 }
 
 export function cleanupTempDir(tempDir: string | undefined): void {

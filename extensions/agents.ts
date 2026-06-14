@@ -30,7 +30,7 @@ function parseFrontmatter(raw: string): { fm: Record<string, string>; body: stri
   const fm: Record<string, string> = {};
 
   for (const line of match[1].split("\n")) {
-    const kv = line.match(/^(\w+):\s*(.+)/);
+    const kv = line.match(/^([\w-]+):\s*(.+)/);
     if (kv) fm[kv[1]] = kv[2].trim();
   }
 
